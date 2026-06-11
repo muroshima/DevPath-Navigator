@@ -9,7 +9,7 @@
 推薦するキャリアナビゲーター。
 
 [**▶ ライブデモ**](https://devpath-frontend-430189693163.asia-northeast1.run.app)
-&middot; [Agent API](https://devpath-agent-430189693163.asia-northeast1.run.app)
+&middot; [Agent API (Swagger)](https://devpath-agent-430189693163.asia-northeast1.run.app/docs)
 &middot; [Architecture](./ARCHITECTURE.ja.md)
 
 ![Career clusters](./docs/cluster_map.png)
@@ -128,6 +128,8 @@ AGENT_URL=http://127.0.0.1:8088 npm run dev
 
 ### コマンドラインからエージェントを叩く
 
+ローカル:
+
 ```bash
 curl -sS http://127.0.0.1:8088/chat \
   -H 'content-type: application/json' \
@@ -136,6 +138,26 @@ curl -sS http://127.0.0.1:8088/chat \
     "message": "backend を5年（Java / Postgres、その後 Go と Kubernetes）やってきた mid level です。SRE に進むなら何が足りませんか？"
   }' | jq .
 ```
+
+ライブの agent を直接叩く（rate limit あり、認証なし）:
+
+```bash
+# readiness probe
+curl -sS https://devpath-agent-430189693163.asia-northeast1.run.app/health
+# → {"status":"ok"}
+
+# 実際のチャット（IP 単位で 5 burst / 0.25 rps の制限あり）
+curl -sS https://devpath-agent-430189693163.asia-northeast1.run.app/chat \
+  -H 'content-type: application/json' \
+  -d '{
+    "user_id": "demo",
+    "message": "backend を 5 年（Java/Postgres、後半 Go と Kubernetes）。SRE に進むなら何が足りませんか？"
+  }' | jq .
+```
+
+公開されているエンドポイント一覧は
+[`/docs`](https://devpath-agent-430189693163.asia-northeast1.run.app/docs)
+（FastAPI Swagger UI）で確認できる。
 
 ## デモシナリオ — 再学習ループ
 
