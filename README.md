@@ -77,6 +77,30 @@ to inspect specific examples.
 | Retrain | Cloud Build · Cloud Run revision rollout · BigQuery `eval_results` |
 | Hosting | Cloud Run (agent + frontend) · Terraform-managed |
 
+### Vertex AI / Gemini wiring
+
+The agent's LLM calls go through **Vertex AI** (the hackathon's
+required runtime), not AI Studio. Concrete bindings:
+
+- **Model** — `gemini-2.5-flash` invoked via the `google-genai` SDK
+  with `vertexai=True`. Overridable via `GEMINI_MODEL` env var
+  ([`agent/agent.py:12`](./agent/agent.py)).
+- **Client routing** — `GOOGLE_GENAI_USE_VERTEXAI=true` is set at
+  process start ([`agent/server.py:38`](./agent/server.py)) and is
+  also injected into the Cloud Run revision through Terraform
+  ([`infra/cloudrun.tf:74`](./infra/cloudrun.tf)).
+- **Region** — `VERTEX_LOCATION` (default `us-central1`).
+- **IAM** — the agent runtime SA has `roles/aiplatform.user`
+  ([`infra/iam.tf:18`](./infra/iam.tf)), and `aiplatform.googleapis.com`
+  is in the Terraform-managed API list
+  ([`infra/services.tf:9`](./infra/services.tf)).
+
+Trajectory embeddings are NOT computed via Vertex AI. The corpus is
+small enough (~1,500 trajectories) that a custom 128-d Word2Vec model
+trained in ~3 s is faster, deterministic (with `workers=1`), and
+free — so embedding lives in `embedding/` on the local toolchain and
+its output is stored in BigQuery.
+
 ## Architecture
 
 ![System architecture](./docs/architecture.drawio.svg)
