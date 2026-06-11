@@ -1,0 +1,99 @@
+# DevPath Navigator — Taxonomy v1 (frozen 2026-06-10)
+#
+# This file is the single source of truth for roles, seniority levels, and tech tokens.
+# Data generation, frontend dropdowns, and the agent's profile normalizer all read this.
+#
+# Token naming convention:
+#   - roles: bare role name (e.g. "backend", "ml_engineer")
+#   - tech:  "<category>.<tool>" (e.g. "lang.python", "infra.kubernetes")
+#   - seniority: bare level name
+# When embedding, these are concatenated into a single vocabulary
+# (the prefix prevents collisions between same-named items in different categories).
+
+version: 1
+frozen_at: "2026-06-10"
+
+roles:
+  - backend
+  - frontend
+  - fullstack
+  - mobile
+  - sre
+  - platform
+  - data_engineer
+  - ml_engineer
+  - genai_engineer
+  - security
+  - em
+  - pm
+
+seniority:
+  - junior
+  - mid
+  - senior
+  - staff
+  - manager
+
+tech:
+  lang:
+    - java
+    - kotlin
+    - python
+    - typescript
+    - javascript
+    - go
+    - rust
+    - scala
+    - ruby
+    - swift
+    - csharp
+  web:
+    - react
+    - nextjs
+    - vue
+    - nodejs
+    - rails
+    - django
+    - fastapi
+    - spring
+    - dotnet
+    - graphql
+  infra:
+    - kubernetes
+    - docker
+    - terraform
+    - ansible
+    - gcp
+    - aws
+    - azure
+    - linux
+    - helm
+  data:
+    - postgres
+    - mysql
+    - mongodb
+    - redis
+    - kafka
+    - snowflake
+    - bigquery
+    - dbt
+    - airflow
+    - spark
+  ml:
+    - pytorch
+    - tensorflow
+    - scikit_learn
+    - huggingface
+    - langchain
+    - vertex_ai
+    - mlflow
+  mobile:
+    - react_native
+    - flutter
+    - swift_ui
+    - jetpack_compose
+  security:
+    - oauth
+    - owasp
+    - iam
+    - vault

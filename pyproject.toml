@@ -1,0 +1,42 @@
+[project]
+name = "devpath-navigator"
+version = "0.1.0"
+description = "DevOps x AI Agent Hackathon 2026 — career trajectory navigator (synthetic data only)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6.0.2",
+    "google-cloud-bigquery>=3.25.0",
+    "numpy>=1.26",
+    "gensim>=4.3.3",
+    "umap-learn>=0.5.6",
+    "hdbscan>=0.8.39",
+    "matplotlib>=3.9.0",
+    "google-adk>=0.4.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6.0",
+    "pytest>=8.3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# E402: many scripts here insert REPO_ROOT into sys.path before importing
+#       sibling packages (data-gen/embedding/agent/eval), which trips E402.
+# E501: long lines in agent prompts and BigQuery SQL strings are deliberate.
+ignore = ["E402", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
