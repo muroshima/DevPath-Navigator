@@ -9,7 +9,7 @@ map, and let a Gemini-powered agent recommend "what to do next" grounded
 in the actual moves of engineers with similar paths.
 
 [**▶ Live demo**](https://devpath-frontend-430189693163.asia-northeast1.run.app)
-&middot; [Agent API](https://devpath-agent-430189693163.asia-northeast1.run.app)
+&middot; [Agent API (Swagger)](https://devpath-agent-430189693163.asia-northeast1.run.app/docs)
 &middot; [Architecture](./ARCHITECTURE.md)
 
 ![Career clusters](./docs/cluster_map.png)
@@ -136,6 +136,8 @@ Then open `http://127.0.0.1:3000`.
 
 ### Try the agent from the command line
 
+Local:
+
 ```bash
 curl -sS http://127.0.0.1:8088/chat \
   -H 'content-type: application/json' \
@@ -144,6 +146,26 @@ curl -sS http://127.0.0.1:8088/chat \
     "message": "I'\''ve been a backend engineer for 5 years (Java, Postgres, then Go on Kubernetes). I want to move into SRE — what'\''s the gap?"
   }' | jq .
 ```
+
+Hit the live agent directly (rate-limited but unauthenticated):
+
+```bash
+# readiness probe
+curl -sS https://devpath-agent-430189693163.asia-northeast1.run.app/health
+# → {"status":"ok"}
+
+# real chat (rate limited to 5 burst / 0.25 rps per IP)
+curl -sS https://devpath-agent-430189693163.asia-northeast1.run.app/chat \
+  -H 'content-type: application/json' \
+  -d '{
+    "user_id": "demo",
+    "message": "backend を 5 年（Java/Postgres、後半 Go と Kubernetes）。SRE に進むなら何が足りませんか？"
+  }' | jq .
+```
+
+The full set of available endpoints is at
+[`/docs`](https://devpath-agent-430189693163.asia-northeast1.run.app/docs)
+(FastAPI Swagger UI).
 
 ## Demo scenario — the retraining loop
 
