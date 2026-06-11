@@ -1,0 +1,50 @@
+# Cloud Build pipeline: retrain → evaluate → gate → (on pass) deploy.
+#
+# This runs the same flow as pipelines/retrain.sh but on Cloud Build, so the
+# retraining loop is "in the cloud" rather than on a developer laptop:
+#
+#   gcloud builds submit --config pipelines/cloudbuild.retrain.yaml \
+#     --project ai-agent-hackathon-499013 --region asia-northeast1 .
+#
+# pipelines/inject-drift.sh triggers this automatically after loading the
+# drift batch (unless NO_CLOUD_RETRAIN=1), which closes the loop:
+# data arrival → cloud retrain → gate → conditional deploy.
+#
+# The Cloud Build service account needs:
+#   roles/bigquery.dataEditor + roles/bigquery.jobUser  (retrain writes BQ)
+#   roles/run.developer                                  (deploy new revision)
+#   roles/iam.serviceAccountUser on devpath-agent-sa     (actAs at deploy)
+#   roles/artifactregistry.writer + roles/logging.logWriter
+#
+# Grant them once with pipelines/grant-cloudbuild-roles.sh.
+
+substitutions:
+  _REGION: asia-northeast1
+  _BATCHES: "initial drift"   # space-separated; retrain.sh splits on spaces
+  _SKIP_DEPLOY: "0"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+timeout: 1800s
+
+steps:
+  - id: retrain-evaluate-gate-deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    env:
+      - GCP_PROJECT=$PROJECT_ID
+      - GCP_REGION=${_REGION}
+      - BQ_LOCATION=${_REGION}
+      - BQ_DATASET=devpath
+      - BATCHES=${_BATCHES}
+      - SKIP_DEPLOY=${_SKIP_DEPLOY}
+      - UV_LINK_MODE=copy
+    args:
+      - -ceu
+      - |
+        echo "[cloudbuild] installing uv…"
+        pip3 install --quiet uv
+        echo "[cloudbuild] running retrain pipeline (batches: $$BATCHES)…"
+        ./pipelines/retrain.sh

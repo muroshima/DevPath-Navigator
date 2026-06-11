@@ -1,0 +1,40 @@
+# What to exclude when running `gcloud builds submit` or `gcloud run deploy --source .`
+# This shapes the build context uploaded to Cloud Build.
+
+.git/
+.github/
+.gcloudignore
+.gitignore
+.gitattributes
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local data and unrelated subprojects (the agent doesn't need them at build/runtime)
+# NOTE: when deploying frontend, run `gcloud run deploy --source frontend/`
+# so this top-level .gcloudignore does not apply.
+# pipelines/ stays in the upload because cloudbuild.retrain.yaml executes
+# pipelines/retrain.sh inside the build workspace.
+data/
+docs/
+data-gen/*
+!data-gen/taxonomy.yaml
+frontend/
+infra/
+
+# Local envs / IDE
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+.DS_Store
+
+# Markdown
+ARCHITECTURE.md
+PROJECT_OVERVIEW.md
+README.md
