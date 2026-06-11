@@ -1,0 +1,21 @@
+# Copy to terraform.tfvars to override defaults in variables.tf.
+# terraform.tfvars is gitignored.
+
+# project_id            = "ai-agent-hackathon-499013"
+# region                = "asia-northeast1"
+# vertex_region         = "us-central1"
+# bq_dataset_id         = "devpath"
+# agent_service_name    = "devpath-agent"
+# frontend_service_name = "devpath-frontend"
+# gemini_model          = "gemini-2.5-flash"
+# agent_batches         = "initial,drift"
+
+# Container images: pin to SHA-tagged images after the first build.
+# agent_image           = "asia-northeast1-docker.pkg.dev/ai-agent-hackathon-499013/cloud-run-source-deploy/devpath-agent@sha256:..."
+# frontend_image        = "asia-northeast1-docker.pkg.dev/ai-agent-hackathon-499013/cloud-run-source-deploy/devpath-frontend@sha256:..."
+
+# Deployer principal — who calls `gcloud run deploy`. Needs iam.serviceAccountUser
+# on the agent SA. Leave unset if Cloud Build (the default compute SA) is the
+# only deployer; set to your user/SA otherwise.
+# deployer_principal    = "user:YOUR_EMAIL@example.com"
+# deployer_principal    = "serviceAccount:NAME@PROJECT.iam.gserviceaccount.com"

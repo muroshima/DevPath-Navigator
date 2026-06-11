@@ -1,0 +1,52 @@
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+.python-version
+
+# ---------- Node ----------
+node_modules/
+.next/
+dist/
+build/
+.pnpm-store/
+
+# ---------- Terraform ----------
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!example.tfvars
+crash.log
+
+# ---------- Env / Secrets ----------
+.env
+.env.*
+!.env.example
+
+# ---------- Generated data ----------
+data/
+*.jsonl
+!eval/judge/*.jsonl
+
+# ---------- IDE / OS ----------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---------- draw.io ----------
+docs/.$*.dtmp
+.$*.dtmp
+
+# ---------- Terraform (extra) ----------
+infra/.terraform/
+infra/.terraform.lock.hcl
+infra/terraform.tfvars
+infra/*.tfplan
+infra/plan.out
