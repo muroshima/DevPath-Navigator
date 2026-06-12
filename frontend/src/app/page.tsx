@@ -32,6 +32,8 @@ interface RecommendedPath {
   x: number;
   y: number;
   supportCount: number;
+  commonNewTech: string[];
+  sampleTrajectory: string | null;
 }
 
 export default function Page() {
@@ -99,6 +101,7 @@ export default function Page() {
         const recs = (resp.recommendations as Array<{
           next_role: string;
           support_count: number;
+          common_new_tech: Array<{ tech: string; count: number }>;
           representative_trajectories: Array<{ employee_id: string; trajectory: string }>;
         }>) ?? [];
         setRecommendedPaths(computeRecommendedPaths(recs));
@@ -113,6 +116,7 @@ export default function Page() {
     recs: Array<{
       next_role: string;
       support_count: number;
+      common_new_tech: Array<{ tech: string; count: number }>;
       representative_trajectories: Array<{ employee_id: string; trajectory: string }>;
     }>,
   ): RecommendedPath[] {
@@ -129,6 +133,8 @@ export default function Page() {
         x: coords.reduce((s, p) => s + p.x, 0) / coords.length,
         y: coords.reduce((s, p) => s + p.y, 0) / coords.length,
         supportCount: rec.support_count,
+        commonNewTech: (rec.common_new_tech ?? []).map((t) => t.tech).filter(Boolean),
+        sampleTrajectory: rec.representative_trajectories?.[0]?.trajectory ?? null,
       });
     }
     return paths.slice(0, 3);

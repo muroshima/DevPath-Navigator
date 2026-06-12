@@ -26,7 +26,7 @@ export default function ChatPanel({ messages, onSend, busy }: Props) {
       >
         {messages.length === 0 && (
           <div className="text-xs text-slate-500">
-            左のフォームでプロフィールを入力するか、下の入力欄から自由に質問してみてください。
+            まずプロフィールを送ると、左のマップに現在地・近傍・推薦ルートが重なります。下の入力欄から自由に質問もできます。
           </div>
         )}
         {messages.map((m) => (

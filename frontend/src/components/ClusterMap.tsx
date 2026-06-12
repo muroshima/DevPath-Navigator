@@ -21,6 +21,8 @@ interface RecommendedPath {
   x: number;
   y: number;
   supportCount: number;
+  commonNewTech: string[];
+  sampleTrajectory: string | null;
 }
 
 interface Props {
@@ -43,6 +45,12 @@ export default function ClusterMap({
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 600, h: 480 });
   const [hovered, setHovered] = useState<MapPoint | null>(null);
+  const [hoveredPath, setHoveredPath] = useState<{
+    path: RecommendedPath;
+    index: number;
+    x: number;
+    y: number;
+  } | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -161,11 +169,21 @@ export default function ClusterMap({
                     <path
                       d={`M ${from.cx},${from.cy} Q ${ctrlX},${ctrlY} ${to.cx},${to.cy}`}
                       fill="none"
+                      stroke="transparent"
+                      strokeWidth={14}
+                      onMouseEnter={() => setHoveredPath({ path: p, index: i, x: ctrlX, y: ctrlY })}
+                      onMouseLeave={() => setHoveredPath(null)}
+                      style={{ cursor: "help" }}
+                    />
+                    <path
+                      d={`M ${from.cx},${from.cy} Q ${ctrlX},${ctrlY} ${to.cx},${to.cy}`}
+                      fill="none"
                       stroke={color}
-                      strokeWidth={2.5}
+                      strokeWidth={hoveredPath?.index === i ? 3.5 : 2.5}
                       strokeDasharray="7 5"
                       markerEnd={`url(#arrowhead-${i})`}
-                      opacity={0.9}
+                      opacity={hoveredPath && hoveredPath.index !== i ? 0.55 : 0.9}
+                      pointerEvents="none"
                     >
                       <animate
                         attributeName="stroke-dashoffset"
@@ -175,28 +193,42 @@ export default function ClusterMap({
                         repeatCount="indefinite"
                       />
                     </path>
-                    <g transform={`translate(${ctrlX}, ${ctrlY})`}>
-                      <rect
-                        x={-44}
-                        y={-11}
-                        width={88}
-                        height={18}
-                        rx={4}
+                    <g
+                      transform={`translate(${ctrlX}, ${ctrlY})`}
+                      onMouseEnter={() => setHoveredPath({ path: p, index: i, x: ctrlX, y: ctrlY })}
+                      onMouseLeave={() => setHoveredPath(null)}
+                      style={{ cursor: "help" }}
+                    >
+                      <circle
+                        r={9}
                         fill="#0b1020"
                         stroke={color}
-                        strokeWidth={1.2}
-                        opacity={0.95}
+                        strokeWidth={1.5}
+                        opacity={0.96}
                       />
                       <text
                         x={0}
-                        y={2}
-                        fontSize={10}
+                        y={3.5}
+                        fontSize={9}
                         textAnchor="middle"
                         fill={color}
-                        fontWeight={700}
+                        fontWeight={800}
+                        pointerEvents="none"
                       >
-                        {p.role}（{p.supportCount}名）
+                        {i + 1}
                       </text>
+                      {hoveredPath?.index === i && (
+                        <text
+                          x={13}
+                          y={4}
+                          fontSize={10}
+                          fill={color}
+                          fontWeight={700}
+                          pointerEvents="none"
+                        >
+                          {p.role}
+                        </text>
+                      )}
                     </g>
                   </g>
                 );
@@ -238,6 +270,33 @@ export default function ClusterMap({
           </div>
         );
       })()}
+
+      {hoveredPath && (
+        <div
+          className="absolute z-20 pointer-events-none w-64 rounded-md border border-slate-700 bg-slate-950/95 p-2 text-xs shadow-xl"
+          style={{
+            left: Math.min(size.w - 280, Math.max(12, hoveredPath.x + 14)),
+            top: Math.min(size.h - 150, Math.max(12, hoveredPath.y + 14)),
+          }}
+        >
+          <div className="font-semibold" style={{ color: PATH_COLORS[hoveredPath.index % PATH_COLORS.length] }}>
+            次にすること: {hoveredPath.path.role}
+          </div>
+          <div className="mt-1 text-slate-300">
+            似た軌跡の {hoveredPath.path.supportCount} 名が次に踏んだ一手です。
+          </div>
+          {hoveredPath.path.commonNewTech.length > 0 && (
+            <div className="mt-1 text-slate-400">
+              まず触る技術: {hoveredPath.path.commonNewTech.slice(0, 3).join(", ")}
+            </div>
+          )}
+          {hoveredPath.path.sampleTrajectory && (
+            <div className="mt-1 text-slate-500">
+              例: {hoveredPath.path.sampleTrajectory}
+            </div>
+          )}
+        </div>
+      )}
 
       <ClusterLegend clusters={clusters} colorOf={colorOf} />
     </div>
