@@ -21,6 +21,8 @@ interface RecommendedPath {
   x: number;
   y: number;
   supportCount: number;
+  commonNewTech: string[];
+  sampleTrajectory: string | null;
 }
 
 interface Props {
@@ -43,6 +45,12 @@ export default function ClusterMap({
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 600, h: 480 });
   const [hovered, setHovered] = useState<MapPoint | null>(null);
+  const [hoveredPath, setHoveredPath] = useState<{
+    path: RecommendedPath;
+    index: number;
+    x: number;
+    y: number;
+  } | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -80,6 +88,9 @@ export default function ClusterMap({
 
   const colorOf = (cid: number) => (cid < 0 ? "#475569" : PALETTE[cid % PALETTE.length]);
   const highlightSet = new Set(highlightEmployees ?? []);
+  const hasRecommendations = Boolean(userPoint && (recommendedPaths ?? []).length > 0);
+  const shorten = (text: string, max = 15) =>
+    text.length > max ? `${text.slice(0, max - 1)}…` : text;
 
   return (
     <div ref={containerRef} className="relative h-full w-full">
@@ -161,11 +172,21 @@ export default function ClusterMap({
                     <path
                       d={`M ${from.cx},${from.cy} Q ${ctrlX},${ctrlY} ${to.cx},${to.cy}`}
                       fill="none"
+                      stroke="transparent"
+                      strokeWidth={14}
+                      onMouseEnter={() => setHoveredPath({ path: p, index: i, x: ctrlX, y: ctrlY })}
+                      onMouseLeave={() => setHoveredPath(null)}
+                      style={{ cursor: "help" }}
+                    />
+                    <path
+                      d={`M ${from.cx},${from.cy} Q ${ctrlX},${ctrlY} ${to.cx},${to.cy}`}
+                      fill="none"
                       stroke={color}
-                      strokeWidth={2.5}
+                      strokeWidth={hoveredPath?.index === i ? 3.5 : 2.5}
                       strokeDasharray="7 5"
                       markerEnd={`url(#arrowhead-${i})`}
-                      opacity={0.9}
+                      opacity={hoveredPath && hoveredPath.index !== i ? 0.55 : 0.9}
+                      pointerEvents="none"
                     >
                       <animate
                         attributeName="stroke-dashoffset"
@@ -177,25 +198,28 @@ export default function ClusterMap({
                     </path>
                     <g transform={`translate(${ctrlX}, ${ctrlY})`}>
                       <rect
-                        x={-44}
-                        y={-11}
-                        width={88}
-                        height={18}
+                        x={-56}
+                        y={-14}
+                        width={112}
+                        height={24}
                         rx={4}
                         fill="#0b1020"
                         stroke={color}
                         strokeWidth={1.2}
                         opacity={0.95}
+                        onMouseEnter={() => setHoveredPath({ path: p, index: i, x: ctrlX, y: ctrlY })}
+                        onMouseLeave={() => setHoveredPath(null)}
                       />
                       <text
                         x={0}
-                        y={2}
+                        y={1}
                         fontSize={10}
                         textAnchor="middle"
                         fill={color}
                         fontWeight={700}
+                        pointerEvents="none"
                       >
-                        {p.role}（{p.supportCount}名）
+                        次: {shorten(p.role)}（{p.supportCount}名）
                       </text>
                     </g>
                   </g>
@@ -235,11 +259,69 @@ export default function ClusterMap({
             <div className="text-slate-400">
               cluster #{hovered.cluster_id} · {hovered.archetype ?? "—"}
             </div>
+            <div className="mt-1 max-w-48 text-slate-500">
+              この点は1人の合成キャリア軌跡です。近い点ほどロール・技術の歩みが似ています。
+            </div>
           </div>
         );
       })()}
 
+      {hoveredPath && (
+        <div
+          className="absolute z-20 pointer-events-none w-64 rounded-md border border-slate-700 bg-slate-950/95 p-2 text-xs shadow-xl"
+          style={{
+            left: Math.min(size.w - 280, Math.max(12, hoveredPath.x + 14)),
+            top: Math.min(size.h - 150, Math.max(12, hoveredPath.y + 14)),
+          }}
+        >
+          <div className="font-semibold" style={{ color: PATH_COLORS[hoveredPath.index % PATH_COLORS.length] }}>
+            {hoveredPath.path.role} へ進む候補
+          </div>
+          <div className="mt-1 text-slate-300">
+            似た軌跡の {hoveredPath.path.supportCount} 名が次に踏んだ一手です。
+          </div>
+          {hoveredPath.path.commonNewTech.length > 0 && (
+            <div className="mt-1 text-slate-400">
+              まず触る技術: {hoveredPath.path.commonNewTech.slice(0, 3).join(", ")}
+            </div>
+          )}
+          {hoveredPath.path.sampleTrajectory && (
+            <div className="mt-1 text-slate-500">
+              例: {hoveredPath.path.sampleTrajectory}
+            </div>
+          )}
+        </div>
+      )}
+
+      <MapGuide hasUserPoint={Boolean(userPoint)} hasRecommendations={hasRecommendations} />
       <ClusterLegend clusters={clusters} colorOf={colorOf} />
+    </div>
+  );
+}
+
+function MapGuide({
+  hasUserPoint,
+  hasRecommendations,
+}: {
+  hasUserPoint: boolean;
+  hasRecommendations: boolean;
+}) {
+  return (
+    <div className="absolute left-2 top-2 max-w-[min(24rem,calc(100%-1rem))] rounded-md border border-slate-700 bg-slate-950/85 p-2 text-xs shadow-lg">
+      <div className="font-semibold text-slate-200">キャリアマップの見方</div>
+      {!hasUserPoint ? (
+        <div className="mt-1 text-slate-400">
+          今は合成コーパス全体の分布です。右側でプロフィールを送ると、あなたの現在地・近傍・推薦ルートが重なります。
+        </div>
+      ) : (
+        <div className="mt-1 grid gap-1 text-slate-400">
+          <div><span className="text-yellow-300">黄色</span> = あなたの現在地</div>
+          <div><span className="text-slate-100">白縁の点</span> = 似たキャリア軌跡</div>
+          {hasRecommendations && (
+            <div><span className="text-amber-300">点線矢印</span> = 近傍コホートが次に踏んだ一手。ホバーで根拠を確認できます。</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -251,7 +333,7 @@ type LegendCorner = "tl" | "tr" | "bl" | "br";
 // "再学習ダッシュボード →" + "DevPath Navigator · 合成データ" pills).
 // If that header changes height, bump this value too.
 const CORNER_CLASSES: Record<LegendCorner, string> = {
-  tl: "left-2 top-2",
+  tl: "left-2 top-28",
   tr: "right-2 top-12",
   bl: "left-2 bottom-2",
   br: "right-2 bottom-2",
@@ -286,7 +368,7 @@ function ClusterLegend({
   colorOf: (cid: number) => string;
 }) {
   const real = clusters.filter((c) => c.cluster_id >= 0).sort((a, b) => b.size - a.size);
-  const [corner, setCorner] = useState<LegendCorner>("tl");
+  const [corner, setCorner] = useState<LegendCorner>("bl");
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {

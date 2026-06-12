@@ -32,6 +32,8 @@ interface RecommendedPath {
   x: number;
   y: number;
   supportCount: number;
+  commonNewTech: string[];
+  sampleTrajectory: string | null;
 }
 
 export default function Page() {
@@ -99,6 +101,7 @@ export default function Page() {
         const recs = (resp.recommendations as Array<{
           next_role: string;
           support_count: number;
+          common_new_tech: Array<{ tech: string; count: number }>;
           representative_trajectories: Array<{ employee_id: string; trajectory: string }>;
         }>) ?? [];
         setRecommendedPaths(computeRecommendedPaths(recs));
@@ -113,6 +116,7 @@ export default function Page() {
     recs: Array<{
       next_role: string;
       support_count: number;
+      common_new_tech: Array<{ tech: string; count: number }>;
       representative_trajectories: Array<{ employee_id: string; trajectory: string }>;
     }>,
   ): RecommendedPath[] {
@@ -129,6 +133,8 @@ export default function Page() {
         x: coords.reduce((s, p) => s + p.x, 0) / coords.length,
         y: coords.reduce((s, p) => s + p.y, 0) / coords.length,
         supportCount: rec.support_count,
+        commonNewTech: (rec.common_new_tech ?? []).map((t) => t.tech).filter(Boolean),
+        sampleTrajectory: rec.representative_trajectories?.[0]?.trajectory ?? null,
       });
     }
     return paths.slice(0, 3);
@@ -173,9 +179,13 @@ export default function Page() {
   }
 
   return (
-    <div className="flex h-screen text-slate-100">
+    <div className="flex h-screen flex-col text-slate-100 lg:flex-row">
       {/* Map */}
-      <section className="relative flex-1 border-r border-slate-700">
+      <section
+        className={`relative min-h-[38vh] border-b border-slate-700 transition-[flex-grow] duration-300 lg:min-h-0 lg:border-b-0 lg:border-r ${
+          userPoint ? "lg:flex-1" : "lg:flex-[0.78]"
+        }`}
+      >
         {mapData ? (
           <ClusterMap
             points={mapData.points}
@@ -203,7 +213,7 @@ export default function Page() {
       </section>
 
       {/* Right column: profile + chat + log */}
-      <aside className="flex w-[440px] flex-col">
+      <aside className={`flex min-h-0 flex-1 flex-col lg:flex-none ${userPoint ? "lg:w-[440px]" : "lg:w-[500px]"}`}>
         <div className="max-h-[55vh] overflow-y-auto border-b border-slate-700 bg-slate-900/60 p-3">
           <ProfileForm
             onSubmit={(message) => send(message)}
