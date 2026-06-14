@@ -10,6 +10,7 @@ import { fetchMap, postChat } from "@/lib/api";
 import type {
   ChatMessage,
   MapResponse,
+  RecommendedPath,
   ToolCall,
   ToolResult,
 } from "@/lib/types";
@@ -27,11 +28,26 @@ interface UserPoint {
   archetype: string | null;
 }
 
-interface RecommendedPath {
-  role: string;
-  x: number;
-  y: number;
-  supportCount: number;
+// Shape we expect from the recommend_next_steps tool. The cast is from
+// `unknown` (the tool result is JSON the agent produced), so TypeScript
+// cannot actually verify any of this at runtime — the type is a
+// *declaration of contract*, not a guarantee. The fields are split as:
+//
+//   - next_role / support_count: required by contract. The downstream
+//     loop uses them directly; if the agent ever returned a row without
+//     them, TypeScript would not catch it (the assertion bypasses the
+//     check) but the rendered output would silently be `undefined` /
+//     `NaN`, which we'd notice in QA. If we later add runtime validation
+//     (e.g. zod), these are the fields it must demand.
+//   - common_new_tech / representative_trajectories: optional even by
+//     contract. computeRecommendedPaths already guards both with
+//     `?? []` / optional chaining, and the agent may legitimately
+//     return cohorts where one or both are empty.
+interface RecommendNextStepsRow {
+  next_role: string;
+  support_count: number;
+  common_new_tech?: Array<{ tech: string; count: number }>;
+  representative_trajectories?: Array<{ employee_id: string; trajectory: string }>;
 }
 
 export default function Page() {
@@ -96,11 +112,7 @@ export default function Page() {
       }
       if (r.name === "recommend_next_steps" && r.response) {
         const resp = r.response as Record<string, unknown>;
-        const recs = (resp.recommendations as Array<{
-          next_role: string;
-          support_count: number;
-          representative_trajectories: Array<{ employee_id: string; trajectory: string }>;
-        }>) ?? [];
+        const recs = (resp.recommendations as RecommendNextStepsRow[]) ?? [];
         setRecommendedPaths(computeRecommendedPaths(recs));
       }
     }
@@ -110,11 +122,7 @@ export default function Page() {
   // cohort's map positions, so the arrow points at the actual engineers
   // that exemplify the move (not an abstract cluster center).
   function computeRecommendedPaths(
-    recs: Array<{
-      next_role: string;
-      support_count: number;
-      representative_trajectories: Array<{ employee_id: string; trajectory: string }>;
-    }>,
+    recs: RecommendNextStepsRow[],
   ): RecommendedPath[] {
     if (!mapData) return [];
     const byId = new Map(mapData.points.map((p) => [p.employee_id, p]));
@@ -129,6 +137,8 @@ export default function Page() {
         x: coords.reduce((s, p) => s + p.x, 0) / coords.length,
         y: coords.reduce((s, p) => s + p.y, 0) / coords.length,
         supportCount: rec.support_count,
+        commonNewTech: (rec.common_new_tech ?? []).map((t) => t.tech).filter(Boolean),
+        sampleTrajectory: rec.representative_trajectories?.[0]?.trajectory ?? null,
       });
     }
     return paths.slice(0, 3);
