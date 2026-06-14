@@ -163,7 +163,6 @@ def compute_recall_at_10(
     """
 
     hits = 0
-    scored = 0  # held-out users that produced a usable prediction
     arch_hits: dict[str, int] = defaultdict(int)
     arch_total: dict[str, int] = defaultdict(int)
     for emp in held_out:
@@ -209,7 +208,6 @@ def compute_recall_at_10(
             if pr:
                 predicted_next_roles.add(pr)
 
-        scored += 1
         is_hit = actual_next_role in predicted_next_roles
         if is_hit:
             hits += 1
