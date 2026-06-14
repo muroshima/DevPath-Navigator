@@ -12,13 +12,12 @@ in the actual moves of engineers with similar paths.
 
 ## 30-second tour
 
-<video src="./docs/demo-30s.mp4" controls width="720">
-  Your browser doesn't support inline video.
-  <a href="./docs/demo-30s.mp4">Download (MP4)</a>
-</video>
+[![Click the thumbnail to play the 30-second walkthrough](./docs/demo-30s-thumb.jpg)](./docs/demo-30s.mp4)
 
-A 90-second submission walk-through that also covers the retrain
-dashboard is at [`docs/demo-90s.mp4`](./docs/demo-90s.mp4).
+> GitHub strips inline `<video>` tags from README files; click the
+> thumbnail to play the MP4. The 90-second submission walk-through
+> (covers the retrain dashboard) is at
+> [`docs/demo-90s.mp4`](./docs/demo-90s.mp4).
 
 ## Why
 
