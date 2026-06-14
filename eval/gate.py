@@ -38,6 +38,12 @@ from eval.metrics import EvalMetrics
 from eval.store import EvalRecord
 
 RECALL_EPS = 0.10
+# Per-archetype recall is noisier than the aggregate — each archetype's
+# slice is ~25 held-out users (HELDOUT_PER_ARCHETYPE), so a single
+# misprediction shifts the slice by 4 points. A wider epsilon here keeps
+# the gate from flapping on within-noise variation while still catching a
+# real one-cohort regression (15-point drop is well beyond noise).
+MIN_RECALL_EPS = 0.15
 
 
 @dataclass
@@ -103,6 +109,45 @@ def decide(current: EvalMetrics, previous: EvalRecord | None) -> Decision:
     else:
         reasons.append(
             f"cluster count ok: {current.n_clusters} (prev {previous.n_clusters})"
+        )
+
+    # Per-archetype recall floor.
+    # Aggregate recall_at_10 averages across archetypes, so a severe
+    # regression on one cohort can be masked by stable / improved
+    # performance on the others. Compare the min-across-archetypes too.
+    # If the previous record pre-dates this metric (None), skip the check
+    # and surface that fact in the reasons — we can't fairly judge against
+    # an absent baseline.
+    if previous.min_recall_per_archetype is None:
+        reasons.append(
+            f"min recall per archetype: {current.min_recall_per_archetype:.3f} "
+            f"(no prior baseline for this metric)"
+        )
+    elif (
+        current.min_recall_per_archetype + 1e-9
+        < previous.min_recall_per_archetype - MIN_RECALL_EPS
+    ):
+        failed = True
+        # Identify the offending archetype if the breakdown is available.
+        worst = (
+            min(current.recall_per_archetype.items(), key=lambda kv: kv[1])
+            if current.recall_per_archetype
+            else None
+        )
+        culprit = (
+            f" (worst: {worst[0]}={worst[1]:.3f})" if worst else ""
+        )
+        reasons.append(
+            f"min recall per archetype dropped: "
+            f"{current.min_recall_per_archetype:.3f} < "
+            f"{previous.min_recall_per_archetype:.3f} - {MIN_RECALL_EPS}"
+            f"{culprit}"
+        )
+    else:
+        reasons.append(
+            f"min recall per archetype ok: "
+            f"{current.min_recall_per_archetype:.3f} vs prev "
+            f"{previous.min_recall_per_archetype:.3f}"
         )
 
     return Decision(decision="fail" if failed else "pass", reasons=reasons)

@@ -32,6 +32,10 @@ SCHEMA = [
     SchemaField("decision", "STRING", mode="REQUIRED"),       # pass | fail | baseline
     SchemaField("decision_reasons", "STRING", mode="REPEATED"),
     SchemaField("notes", "STRING", mode="NULLABLE"),
+    # Minimum Recall@10 across archetypes. NULLABLE so rows written before
+    # this column existed (pre-2026-06 runs) read back as None and the
+    # gate can fall back to the aggregate-only check.
+    SchemaField("min_recall_per_archetype", "FLOAT64", mode="NULLABLE"),
 ]
 
 
@@ -50,6 +54,10 @@ class EvalRecord:
     decision: str
     decision_reasons: list[str]
     notes: str | None = None
+    # `None` distinguishes "this run pre-dates the metric" from "metric
+    # was 0.0". The gate uses that distinction to skip the per-archetype
+    # check on legacy comparisons.
+    min_recall_per_archetype: float | None = None
 
 
 def ensure_table(client: bigquery.Client, dataset: str) -> bigquery.Table:
@@ -57,12 +65,26 @@ def ensure_table(client: bigquery.Client, dataset: str) -> bigquery.Table:
         f"{client.project}.{dataset}.{EVAL_TABLE}"
     )
     try:
-        return client.get_table(table_ref)
+        table = client.get_table(table_ref)
     except NotFound:
         table = bigquery.Table(table_ref, schema=SCHEMA)
         table.description = "DevPath Navigator retraining evaluation history."
         client.create_table(table)
         return client.get_table(table_ref)
+
+    # In-place schema migration: any field in SCHEMA that isn't on the
+    # live table gets appended. BigQuery permits adding NULLABLE or
+    # REPEATED columns to an existing table without rewriting data, and
+    # this lets new metric fields (e.g. min_recall_per_archetype) reach
+    # production without a manual ALTER TABLE step. Existing rows keep
+    # NULL for the new columns.
+    live_names = {f.name for f in table.schema}
+    missing = [f for f in SCHEMA if f.name not in live_names]
+    if missing:
+        table.schema = list(table.schema) + missing
+        client.update_table(table, ["schema"])
+        table = client.get_table(table_ref)
+    return table
 
 
 def insert_record(client: bigquery.Client, dataset: str, record: EvalRecord) -> None:
@@ -99,6 +121,10 @@ def latest_passing(client: bigquery.Client, dataset: str) -> EvalRecord | None:
     if not rows:
         return None
     r = rows[0]
+    # `min_recall_per_archetype` may be NULL on rows written before the
+    # column existed, in which case the field is just missing from the
+    # row object. Fall back to None.
+    min_recall = getattr(r, "min_recall_per_archetype", None)
     return EvalRecord(
         run_id=r.run_id,
         run_at=r.run_at,
@@ -113,25 +139,31 @@ def latest_passing(client: bigquery.Client, dataset: str) -> EvalRecord | None:
         decision=r.decision,
         decision_reasons=list(r.decision_reasons),
         notes=r.notes,
+        min_recall_per_archetype=float(min_recall) if min_recall is not None else None,
     )
 
 
 def history(client: bigquery.Client, dataset: str, limit: int = 50) -> list[dict[str, Any]]:
     ensure_table(client, dataset)
     sql = f"""
-    SELECT run_id, run_at, batches, recall_at_10, n_clusters, mean_archetype_purity,
-           archetypes_covered, vocab_size, decision, decision_reasons
+    SELECT run_id, run_at, batches, recall_at_10, min_recall_per_archetype,
+           n_clusters, mean_archetype_purity, archetypes_covered, vocab_size,
+           decision, decision_reasons
     FROM `{client.project}.{dataset}.{EVAL_TABLE}`
     ORDER BY run_at DESC
     LIMIT {int(limit)}
     """
     out: list[dict[str, Any]] = []
     for r in client.query(sql).result():
+        min_recall = getattr(r, "min_recall_per_archetype", None)
         out.append({
             "run_id": r.run_id,
             "run_at": r.run_at.isoformat() if r.run_at else None,
             "batches": list(r.batches),
             "recall_at_10": float(r.recall_at_10),
+            "min_recall_per_archetype": (
+                float(min_recall) if min_recall is not None else None
+            ),
             "n_clusters": int(r.n_clusters),
             "mean_archetype_purity": float(r.mean_archetype_purity),
             "archetypes_covered": list(r.archetypes_covered),
