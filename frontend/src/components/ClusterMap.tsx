@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { MapCluster, MapPoint } from "@/lib/types";
+import type { MapCluster, MapPoint, RecommendedPath } from "@/lib/types";
 
 const PALETTE = [
   "#60a5fa", "#f472b6", "#a78bfa", "#34d399", "#fbbf24", "#f87171",
@@ -14,15 +14,6 @@ interface UserPoint {
   y: number;
   clusterId: number | null;
   archetype: string | null;
-}
-
-interface RecommendedPath {
-  role: string;
-  x: number;
-  y: number;
-  supportCount: number;
-  commonNewTech: string[];
-  sampleTrajectory: string | null;
 }
 
 interface Props {
@@ -167,19 +158,35 @@ export default function ClusterMap({
                 const isActive = hoveredPath?.index === i;
                 const activate = () => setHoveredPath({ path: p, index: i, x: ctrlX, y: ctrlY });
                 const deactivate = () => setHoveredPath(null);
+                // Mirror the visual tooltip in aria-label so screen-reader
+                // users get the same content without ever triggering the
+                // hover/focus tooltip. Includes the recommended next role,
+                // cohort size, the top 3 new tech tokens, and one example
+                // trajectory — all the fields the visual tooltip surfaces.
+                const techHint = p.commonNewTech.length > 0
+                  ? `; new tech to pick up: ${p.commonNewTech.slice(0, 3).join(", ")}`
+                  : "";
+                const trajHint = p.sampleTrajectory
+                  ? `; example trajectory: ${p.sampleTrajectory}`
+                  : "";
+                const ariaLabel =
+                  `Recommended path ${i + 1}: ${p.role}, ` +
+                  `supported by ${p.supportCount} similar engineers` +
+                  techHint + trajHint;
                 return (
                   // Handlers live on the outer <g> so moving the pointer
                   // between the wide hit-path and the badge — both children
                   // of this group — doesn't fire leave/enter pairs (which
                   // would flicker the tooltip). tabIndex + onFocus/onBlur
                   // makes the same details reachable for keyboard and
-                  // (most) touch users; aria-label gives screen readers
-                  // the same content the tooltip would show.
+                  // (most) touch users. No explicit role: this is a
+                  // tooltip target, not a button — `role="button"` would
+                  // imply Enter/Space activation that doesn't exist
+                  // (focus alone reveals the tooltip).
                   <g
                     key={`path-${i}`}
                     tabIndex={0}
-                    role="button"
-                    aria-label={`Recommended path ${i + 1}: ${p.role}, supported by ${p.supportCount} similar engineers`}
+                    aria-label={ariaLabel}
                     onMouseEnter={activate}
                     onMouseLeave={deactivate}
                     onFocus={activate}

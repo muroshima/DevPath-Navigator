@@ -55,3 +55,16 @@ export interface Step {
   techStack: string[];
   seniority: string;
 }
+
+// Shared between page.tsx (which derives it from recommend_next_steps
+// output) and ClusterMap.tsx (which renders it). Single source of truth
+// so the two files can't drift on fields like commonNewTech /
+// sampleTrajectory.
+export interface RecommendedPath {
+  role: string;
+  x: number;
+  y: number;
+  supportCount: number;
+  commonNewTech: string[];
+  sampleTrajectory: string | null;
+}

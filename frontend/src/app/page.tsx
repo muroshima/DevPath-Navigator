@@ -10,6 +10,7 @@ import { fetchMap, postChat } from "@/lib/api";
 import type {
   ChatMessage,
   MapResponse,
+  RecommendedPath,
   ToolCall,
   ToolResult,
 } from "@/lib/types";
@@ -25,15 +26,6 @@ interface UserPoint {
   y: number;
   clusterId: number | null;
   archetype: string | null;
-}
-
-interface RecommendedPath {
-  role: string;
-  x: number;
-  y: number;
-  supportCount: number;
-  commonNewTech: string[];
-  sampleTrajectory: string | null;
 }
 
 export default function Page() {
