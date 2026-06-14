@@ -222,21 +222,19 @@ export default function ClusterMap({
                   `似た軌跡の ${p.supportCount} 名が踏んだ一手` +
                   techHint + trajHint;
                 return (
-                  // Handlers live on the outer <g> so moving the pointer
-                  // between the wide hit-path and the badge — both children
-                  // of this group — doesn't fire leave/enter pairs (which
-                  // would flicker the tooltip). tabIndex + onFocus/onBlur
-                  // makes the same details reachable for keyboard and
-                  // (most) touch users. No explicit role: this is a
-                  // tooltip target, not a button — `role="button"` would
-                  // imply Enter/Space activation that doesn't exist
-                  // (focus alone reveals the tooltip).
+                  // Outer <g> owns the *keyboard* path (tabIndex / focus /
+                  // blur) and the screen-reader label, so Tab cycles through
+                  // recommendations and `aria-label` mirrors the tooltip
+                  // content. Mouse handlers stay on the inner elements
+                  // (transparent hit-path and badge group) because SVG
+                  // `<g>` has no fill/stroke of its own — `onMouseEnter`
+                  // on the bare `<g>` doesn't reliably fire via descendant
+                  // bubbling on all browsers, and was causing the
+                  // tooltip to never appear on hover.
                   <g
                     key={`path-${i}`}
                     tabIndex={0}
                     aria-label={ariaLabel}
-                    onMouseEnter={activate}
-                    onMouseLeave={deactivateOnMouseLeave}
                     onFocus={activate}
                     onBlur={deactivate}
                   >
@@ -245,6 +243,8 @@ export default function ClusterMap({
                       fill="none"
                       stroke="transparent"
                       strokeWidth={14}
+                      onMouseEnter={activate}
+                      onMouseLeave={deactivateOnMouseLeave}
                       style={{ cursor: "help" }}
                     />
                     <path
@@ -265,7 +265,12 @@ export default function ClusterMap({
                         repeatCount="indefinite"
                       />
                     </path>
-                    <g transform={`translate(${ctrlX}, ${ctrlY})`} style={{ cursor: "help" }}>
+                    <g
+                      transform={`translate(${ctrlX}, ${ctrlY})`}
+                      onMouseEnter={activate}
+                      onMouseLeave={deactivateOnMouseLeave}
+                      style={{ cursor: "help" }}
+                    >
                       <circle
                         r={9}
                         fill="#0b1020"
