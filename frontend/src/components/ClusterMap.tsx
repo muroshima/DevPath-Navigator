@@ -181,18 +181,19 @@ export default function ClusterMap({
                 const deactivate = () => setHoveredPathIndex(null);
                 // Mirror the visual tooltip in aria-label so screen-reader
                 // users get the same content without ever triggering the
-                // hover/focus tooltip. Includes the recommended next role,
-                // cohort size, the top 3 new tech tokens, and one example
-                // trajectory — all the fields the visual tooltip surfaces.
+                // hover/focus tooltip. The visible UI is Japanese (the
+                // surrounding `<html lang="ja">` and the tooltip itself),
+                // so this label is also Japanese — keeping the same TTS
+                // voice/locale that the rest of the UI uses.
                 const techHint = p.commonNewTech.length > 0
-                  ? `; new tech to pick up: ${p.commonNewTech.slice(0, 3).join(", ")}`
+                  ? `、まず触る技術: ${p.commonNewTech.slice(0, 3).join("、")}`
                   : "";
                 const trajHint = p.sampleTrajectory
-                  ? `; example trajectory: ${p.sampleTrajectory}`
+                  ? `、例の軌跡: ${p.sampleTrajectory}`
                   : "";
                 const ariaLabel =
-                  `Recommended path ${i + 1}: ${p.role}, ` +
-                  `supported by ${p.supportCount} similar engineers` +
+                  `推奨パス ${i + 1}: 次は${p.role}、` +
+                  `似た軌跡の ${p.supportCount} 名が踏んだ一手` +
                   techHint + trajHint;
                 return (
                   // Handlers live on the outer <g> so moving the pointer
