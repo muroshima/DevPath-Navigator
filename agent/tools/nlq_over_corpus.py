@@ -23,6 +23,15 @@ ALLOWED_TABLES = {"trajectories", "embeddings", "umap_coords", "clusters"}
 FORBIDDEN_KEYWORDS = {
     "insert", "update", "delete", "drop", "alter", "create", "truncate",
     "merge", "grant", "revoke", "call", "execute", "exec",
+    # UNION lets a crafted query glue an allowed-table SELECT onto a
+    # second SELECT that exfiltrates from elsewhere, or smuggles a
+    # hand-built constant set in the same result shape. The allowlist
+    # plus the single-statement check already block most of that, but
+    # rejecting `union` outright makes the intent explicit and removes
+    # a whole class of "what if the table parser missed something"
+    # reasoning. Both `union` and `union all` are covered because the
+    # match is on the bare `union` word boundary.
+    "union",
 }
 # Anywhere these substrings appear (in the comment-stripped lowercased SQL)
 # is an instant reject. INFORMATION_SCHEMA and the BigQuery system tables
