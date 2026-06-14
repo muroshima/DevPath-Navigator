@@ -65,6 +65,24 @@ def test_rejects_forbidden_keyword():
     _reject("SELECT * FROM `proj.devpath.clusters` UNION SELECT 1 LIMIT 5; DROP TABLE x LIMIT 5", "single statement")
 
 
+def test_rejects_union_in_single_statement():
+    """A single-statement UNION is now explicitly rejected — not via the
+    multi-statement check or via the allowlist, but as a forbidden keyword
+    in its own right. This closes the case where a crafted query glues a
+    SELECT on an allowed table onto a second SELECT that smuggles in
+    constants or reaches for something outside the allowlist."""
+    _reject(
+        "SELECT cluster_id FROM `proj.devpath.clusters` UNION ALL "
+        "SELECT 999 FROM `proj.devpath.clusters` LIMIT 5",
+        "union",
+    )
+    _reject(
+        "SELECT cluster_id FROM `proj.devpath.clusters` UNION "
+        "SELECT 1 LIMIT 5",
+        "union",
+    )
+
+
 def test_block_comment_keywords_are_stripped():
     """Forbidden keywords inside /* */ are noise; the executable SQL is safe."""
     _ok("SELECT * FROM `proj.devpath.clusters` /* DROP TABLE x */ LIMIT 5")
