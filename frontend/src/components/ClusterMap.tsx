@@ -336,7 +336,7 @@ export default function ClusterMap({
             </div>
             {p.commonNewTech.length > 0 && (
               <div className="mt-1 text-slate-400">
-                まず触る技術: {p.commonNewTech.slice(0, 3).join(", ")}
+                まず触る技術: {p.commonNewTech.slice(0, 3).join("、")}
               </div>
             )}
             {p.sampleTrajectory && (
