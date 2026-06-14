@@ -355,7 +355,11 @@ export default function ClusterMap({
         const maxTop = Math.max(12, size.h - 150);
         return (
           <div
-            className="absolute z-20 pointer-events-none w-64 rounded-md border border-slate-700 bg-slate-950/95 p-2 text-xs shadow-xl"
+            // `break-all` so a comma-joined run of tech tokens
+            // (no spaces, e.g. `mobile.swift_ui,infra.kubernetes,
+            // mobile.flutter`) wraps inside the tooltip width
+            // instead of overflowing past the right edge.
+            className="absolute z-20 pointer-events-none w-64 break-all rounded-md border border-slate-700 bg-slate-950/95 p-2 text-xs shadow-xl"
             style={{
               left: Math.min(maxLeft, Math.max(12, ctrlX + 14)),
               top: Math.min(maxTop, Math.max(12, ctrlY + 14)),
