@@ -28,19 +28,21 @@ interface UserPoint {
   archetype: string | null;
 }
 
-// Shape we *assume* the recommend_next_steps tool returns. The cast
-// originates from `unknown` (the tool result is JSON the agent
-// produced), so the type's job is to match how the downstream code
-// actually handles each field:
-//   - next_role / support_count: required. The downstream loop uses
-//     them directly without any runtime guard; if the agent ever
-//     returns a row missing these, that's a contract break we want
-//     to surface as a type error rather than paper over.
-//   - common_new_tech / representative_trajectories: optional.
-//     computeRecommendedPaths already guards both with `?? []` /
-//     optional chaining (the agent may legitimately return empty
-//     cohorts where these aren't populated), and marking them
-//     optional here stops future callers from assuming presence.
+// Shape we expect from the recommend_next_steps tool. The cast is from
+// `unknown` (the tool result is JSON the agent produced), so TypeScript
+// cannot actually verify any of this at runtime — the type is a
+// *declaration of contract*, not a guarantee. The fields are split as:
+//
+//   - next_role / support_count: required by contract. The downstream
+//     loop uses them directly; if the agent ever returned a row without
+//     them, TypeScript would not catch it (the assertion bypasses the
+//     check) but the rendered output would silently be `undefined` /
+//     `NaN`, which we'd notice in QA. If we later add runtime validation
+//     (e.g. zod), these are the fields it must demand.
+//   - common_new_tech / representative_trajectories: optional even by
+//     contract. computeRecommendedPaths already guards both with
+//     `?? []` / optional chaining, and the agent may legitimately
+//     return cohorts where one or both are empty.
 interface RecommendNextStepsRow {
   next_role: string;
   support_count: number;
