@@ -29,11 +29,18 @@ interface UserPoint {
 }
 
 // Shape we *assume* the recommend_next_steps tool returns. The cast
-// path originates from `unknown` (the tool result is JSON the agent
-// produced), so any field on this row may legitimately be missing —
-// marking them optional matches the runtime guards (`?? []`,
-// optional chaining) and prevents future code from assuming
-// presence without checking.
+// originates from `unknown` (the tool result is JSON the agent
+// produced), so the type's job is to match how the downstream code
+// actually handles each field:
+//   - next_role / support_count: required. The downstream loop uses
+//     them directly without any runtime guard; if the agent ever
+//     returns a row missing these, that's a contract break we want
+//     to surface as a type error rather than paper over.
+//   - common_new_tech / representative_trajectories: optional.
+//     computeRecommendedPaths already guards both with `?? []` /
+//     optional chaining (the agent may legitimately return empty
+//     cohorts where these aren't populated), and marking them
+//     optional here stops future callers from assuming presence.
 interface RecommendNextStepsRow {
   next_role: string;
   support_count: number;
