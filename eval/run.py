@@ -90,6 +90,7 @@ def main() -> int:
         decision=dec.decision,
         decision_reasons=dec.reasons,
         notes=args.notes,
+        min_recall_per_archetype=metrics.min_recall_per_archetype,
     )
     insert_record(client, args.dataset, record)
     print(f"[eval] recorded run {record.run_id}")
