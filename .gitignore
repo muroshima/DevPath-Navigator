@@ -23,6 +23,14 @@ frontend/playwright-report/
 frontend/blob-report/
 frontend/playwright/.cache/
 
+# ---------- Demo recording pipeline ----------
+# Raw Playwright recordings and intermediate audio. The finished MP4s
+# live in docs/ and are committed; everything under scripts/demo/output/
+# is regeneratable.
+scripts/demo/output/
+scripts/demo/node_modules/
+scripts/demo/test-results/
+
 # ---------- Terraform ----------
 .terraform/
 *.tfstate

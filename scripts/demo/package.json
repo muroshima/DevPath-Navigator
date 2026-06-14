@@ -1,0 +1,12 @@
+{
+  "name": "devpath-demo",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "record:30s": "playwright test tests/30s.spec.ts --config playwright.config.ts",
+    "record:90s": "playwright test tests/90s.spec.ts --config playwright.config.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0"
+  }
+}
