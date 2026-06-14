@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { MapCluster, MapPoint } from "@/lib/types";
+import type { MapCluster, MapPoint, RecommendedPath } from "@/lib/types";
 
 const PALETTE = [
   "#60a5fa", "#f472b6", "#a78bfa", "#34d399", "#fbbf24", "#f87171",
@@ -16,13 +16,6 @@ interface UserPoint {
   archetype: string | null;
 }
 
-interface RecommendedPath {
-  role: string;
-  x: number;
-  y: number;
-  supportCount: number;
-}
-
 interface Props {
   points: MapPoint[];
   clusters: MapCluster[];
@@ -32,6 +25,31 @@ interface Props {
 }
 
 const PATH_COLORS = ["#fde047", "#fb923c", "#f472b6"];
+
+// Bezier control point for a recommendation arrow: a slight perpendicular
+// bend keyed by the path's index so overlapping arrows stay
+// distinguishable. Shared between the SVG render path and the tooltip
+// positioning so they never disagree on where the curve's midpoint is.
+function pathGeometry(
+  p: RecommendedPath,
+  index: number,
+  total: number,
+  from: { cx: number; cy: number },
+  project: (x: number, y: number) => { cx: number; cy: number },
+): { to: { cx: number; cy: number }; ctrlX: number; ctrlY: number } {
+  const to = project(p.x, p.y);
+  const midX = (from.cx + to.cx) / 2;
+  const midY = (from.cy + to.cy) / 2;
+  const dx = to.cx - from.cx;
+  const dy = to.cy - from.cy;
+  const norm = Math.hypot(dx, dy) || 1;
+  const bend = 24 * (index - (total - 1) / 2);
+  return {
+    to,
+    ctrlX: midX - (dy / norm) * bend,
+    ctrlY: midY + (dx / norm) * bend,
+  };
+}
 
 export default function ClusterMap({
   points,
@@ -43,6 +61,26 @@ export default function ClusterMap({
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 600, h: 480 });
   const [hovered, setHovered] = useState<MapPoint | null>(null);
+  // Just an index — the tooltip's screen position is derived from the
+  // current projection every render, so resizing the window while a
+  // path is hovered no longer leaves the tooltip pointing at a stale
+  // pixel coordinate.
+  const [hoveredPathIndex, setHoveredPathIndex] = useState<number | null>(null);
+
+  // If a new chat answer arrives while a path is hovered/focused and
+  // the recommendation list shrinks to where the current index no
+  // longer points at anything, the tooltip's existence-guard hides it
+  // — but the render loop would otherwise still treat
+  // `hoveredPathIndex !== null` as "some path is active" and dim all
+  // visible paths to opacity 0.55 with no highlight. Reset the index
+  // so the render falls back to the neutral all-paths-bright state
+  // until the user re-hovers.
+  useEffect(() => {
+    const len = recommendedPaths?.length ?? 0;
+    if (hoveredPathIndex !== null && hoveredPathIndex >= len) {
+      setHoveredPathIndex(null);
+    }
+  }, [recommendedPaths, hoveredPathIndex]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -145,27 +183,79 @@ export default function ClusterMap({
                 ))}
               </defs>
               {(recommendedPaths ?? []).map((p, i) => {
-                const to = project(p.x, p.y);
+                const { to, ctrlX, ctrlY } = pathGeometry(
+                  p,
+                  i,
+                  (recommendedPaths ?? []).length,
+                  from,
+                  project,
+                );
                 const color = PATH_COLORS[i % PATH_COLORS.length];
-                const midX = (from.cx + to.cx) / 2;
-                const midY = (from.cy + to.cy) / 2;
-                // Slight curve so overlapping paths stay distinguishable
-                const dx = to.cx - from.cx;
-                const dy = to.cy - from.cy;
-                const norm = Math.hypot(dx, dy) || 1;
-                const bend = 24 * (i - ((recommendedPaths ?? []).length - 1) / 2);
-                const ctrlX = midX - (dy / norm) * bend;
-                const ctrlY = midY + (dx / norm) * bend;
+                const isActive = hoveredPathIndex === i;
+                const activate = () => setHoveredPathIndex(i);
+                const deactivate = () => setHoveredPathIndex(null);
+                // If the user tabbed/clicked into the path (keyboard
+                // focus is on it) and then drifts the mouse away, the
+                // visual tooltip should stay until they blur — leaving
+                // mouseLeave to clear it would yank the highlight out
+                // from under the focused state. Defer to onBlur in that
+                // case.
+                const deactivateOnMouseLeave = (e: React.MouseEvent<SVGGElement>) => {
+                  if (e.currentTarget !== document.activeElement) {
+                    setHoveredPathIndex(null);
+                  }
+                };
+                // Mirror the visual tooltip in aria-label so screen-reader
+                // users get the same content without ever triggering the
+                // hover/focus tooltip. The visible UI is Japanese (the
+                // surrounding `<html lang="ja">` and the tooltip itself),
+                // so this label is also Japanese — keeping the same TTS
+                // voice/locale that the rest of the UI uses.
+                const techHint = p.commonNewTech.length > 0
+                  ? `、おすすめの技術: ${p.commonNewTech.slice(0, 3).join(",")}`
+                  : "";
+                const trajHint = p.sampleTrajectory
+                  ? `、例の軌跡: ${p.sampleTrajectory}`
+                  : "";
+                const ariaLabel =
+                  `推奨パス ${i + 1}: 次は${p.role}、` +
+                  `似た軌跡の ${p.supportCount} 名が踏んだ一手` +
+                  techHint + trajHint;
                 return (
-                  <g key={`path-${i}`}>
+                  // Handlers live on the outer <g> so moving the pointer
+                  // between the wide hit-path and the badge — both children
+                  // of this group — doesn't fire leave/enter pairs (which
+                  // would flicker the tooltip). tabIndex + onFocus/onBlur
+                  // makes the same details reachable for keyboard and
+                  // (most) touch users. No explicit role: this is a
+                  // tooltip target, not a button — `role="button"` would
+                  // imply Enter/Space activation that doesn't exist
+                  // (focus alone reveals the tooltip).
+                  <g
+                    key={`path-${i}`}
+                    tabIndex={0}
+                    aria-label={ariaLabel}
+                    onMouseEnter={activate}
+                    onMouseLeave={deactivateOnMouseLeave}
+                    onFocus={activate}
+                    onBlur={deactivate}
+                  >
+                    <path
+                      d={`M ${from.cx},${from.cy} Q ${ctrlX},${ctrlY} ${to.cx},${to.cy}`}
+                      fill="none"
+                      stroke="transparent"
+                      strokeWidth={14}
+                      style={{ cursor: "help" }}
+                    />
                     <path
                       d={`M ${from.cx},${from.cy} Q ${ctrlX},${ctrlY} ${to.cx},${to.cy}`}
                       fill="none"
                       stroke={color}
-                      strokeWidth={2.5}
+                      strokeWidth={isActive ? 3.5 : 2.5}
                       strokeDasharray="7 5"
                       markerEnd={`url(#arrowhead-${i})`}
-                      opacity={0.9}
+                      opacity={hoveredPathIndex !== null && !isActive ? 0.55 : 0.9}
+                      pointerEvents="none"
                     >
                       <animate
                         attributeName="stroke-dashoffset"
@@ -175,28 +265,37 @@ export default function ClusterMap({
                         repeatCount="indefinite"
                       />
                     </path>
-                    <g transform={`translate(${ctrlX}, ${ctrlY})`}>
-                      <rect
-                        x={-44}
-                        y={-11}
-                        width={88}
-                        height={18}
-                        rx={4}
+                    <g transform={`translate(${ctrlX}, ${ctrlY})`} style={{ cursor: "help" }}>
+                      <circle
+                        r={9}
                         fill="#0b1020"
                         stroke={color}
-                        strokeWidth={1.2}
-                        opacity={0.95}
+                        strokeWidth={1.5}
+                        opacity={0.96}
                       />
                       <text
                         x={0}
-                        y={2}
-                        fontSize={10}
+                        y={3.5}
+                        fontSize={9}
                         textAnchor="middle"
                         fill={color}
-                        fontWeight={700}
+                        fontWeight={800}
+                        pointerEvents="none"
                       >
-                        {p.role}（{p.supportCount}名）
+                        {i + 1}
                       </text>
+                      {isActive && (
+                        <text
+                          x={13}
+                          y={4}
+                          fontSize={10}
+                          fill={color}
+                          fontWeight={700}
+                          pointerEvents="none"
+                        >
+                          {p.role}
+                        </text>
+                      )}
                     </g>
                   </g>
                 );
@@ -235,6 +334,53 @@ export default function ClusterMap({
             <div className="text-slate-400">
               cluster #{hovered.cluster_id} · {hovered.archetype ?? "—"}
             </div>
+          </div>
+        );
+      })()}
+
+      {hoveredPathIndex !== null && userPoint && (recommendedPaths ?? [])[hoveredPathIndex] && (() => {
+        // Recompute the tooltip anchor from the *current* projection so
+        // it tracks the path through window resizes. State stores only
+        // the index, never pixel coords.
+        const paths = recommendedPaths ?? [];
+        const p = paths[hoveredPathIndex];
+        const from = project(userPoint.x, userPoint.y);
+        const { ctrlX, ctrlY } = pathGeometry(p, hoveredPathIndex, paths.length, from, project);
+        // Clamp into the visible viewport. Pin the right/bottom edges to
+        // at least 12 px from the left/top so a container narrower than
+        // the tooltip (size.w < 280, size.h < 150 — guarded against by
+        // setSize today but worth being defensive about) doesn't push
+        // the tooltip off-screen to negative coordinates.
+        const maxLeft = Math.max(12, size.w - 280);
+        const maxTop = Math.max(12, size.h - 150);
+        return (
+          <div
+            // `break-all` so a comma-joined run of tech tokens
+            // (no spaces, e.g. `mobile.swift_ui,infra.kubernetes,
+            // mobile.flutter`) wraps inside the tooltip width
+            // instead of overflowing past the right edge.
+            className="absolute z-20 pointer-events-none w-64 break-all rounded-md border border-slate-700 bg-slate-950/95 p-2 text-xs shadow-xl"
+            style={{
+              left: Math.min(maxLeft, Math.max(12, ctrlX + 14)),
+              top: Math.min(maxTop, Math.max(12, ctrlY + 14)),
+            }}
+          >
+            <div className="font-semibold" style={{ color: PATH_COLORS[hoveredPathIndex % PATH_COLORS.length] }}>
+              次にすること: {p.role}
+            </div>
+            <div className="mt-1 text-slate-300">
+              似た軌跡の {p.supportCount} 名が次に踏んだ一手です。
+            </div>
+            {p.commonNewTech.length > 0 && (
+              <div className="mt-1 text-slate-400">
+                おすすめの技術: {p.commonNewTech.slice(0, 3).join(",")}
+              </div>
+            )}
+            {p.sampleTrajectory && (
+              <div className="mt-1 text-slate-500">
+                例: {p.sampleTrajectory}
+              </div>
+            )}
           </div>
         );
       })()}
