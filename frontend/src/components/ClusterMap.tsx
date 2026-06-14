@@ -212,7 +212,7 @@ export default function ClusterMap({
                 // so this label is also Japanese — keeping the same TTS
                 // voice/locale that the rest of the UI uses.
                 const techHint = p.commonNewTech.length > 0
-                  ? `、まず触る技術: ${p.commonNewTech.slice(0, 3).join("、")}`
+                  ? `、おすすめの技術: ${p.commonNewTech.slice(0, 3).join("、")}`
                   : "";
                 const trajHint = p.sampleTrajectory
                   ? `、例の軌跡: ${p.sampleTrajectory}`
@@ -369,7 +369,7 @@ export default function ClusterMap({
             </div>
             {p.commonNewTech.length > 0 && (
               <div className="mt-1 text-slate-400">
-                まず触る技術: {p.commonNewTech.slice(0, 3).join("、")}
+                おすすめの技術: {p.commonNewTech.slice(0, 3).join("、")}
               </div>
             )}
             {p.sampleTrajectory && (
