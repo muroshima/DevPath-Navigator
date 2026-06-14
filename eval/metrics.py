@@ -30,7 +30,7 @@ from __future__ import annotations
 import random
 import sys
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +56,15 @@ class EvalMetrics:
     archetypes_covered: list[str]
     vocab_size: int
     held_out_n: int
+    # Per-archetype Recall@10. The aggregate `recall_at_10` above is a
+    # macro-average over the stratified held-out set, so it can hide a
+    # severe regression on a single archetype if the others compensate.
+    # Tracking the per-archetype breakdown (and the min across them) lets
+    # the gate fire on "one cohort tanked" cases that aggregate recall
+    # would let through. Default empty dict / 1.0 so older test fixtures
+    # and prior-run records (which never wrote these fields) don't break.
+    recall_per_archetype: dict[str, float] = field(default_factory=dict)
+    min_recall_per_archetype: float = 1.0
 
 
 def _primary_role(roles_field: Any) -> str | None:
@@ -98,21 +107,41 @@ def stratified_heldout(
     return held
 
 
+@dataclass
+class RecallBreakdown:
+    """Result of next-role Recall@10 evaluation.
+
+    `overall` is the macro recall across all held-out users (legacy metric,
+    kept identical to what the previous scalar return reported). The
+    `per_archetype` map gives recall sliced by the archetype of the
+    held-out user, so a regression isolated to one cohort is visible in
+    its own right.
+    """
+
+    overall: float
+    per_archetype: dict[str, float]
+
+
 def compute_recall_at_10(
     client: bigquery.Client,
     dataset: str,
     grouped: dict[str, list[dict[str, Any]]],
     vectors: KeyedVectors,
     held_out: list[str],
-) -> float:
+) -> RecallBreakdown:
     """Recall@10 on next-role prediction (primary role per step).
 
     The neighbors are taken from the embeddings table via VECTOR_SEARCH;
     we ask for top_k=11 and then drop any row whose employee_id matches the
     held-out user (otherwise the user could trivially self-match).
+
+    Returns both the overall recall (macro across the full held-out set)
+    and a per-archetype breakdown. Held-out users with no resolvable
+    archetype (empty / missing label on their first step) are still
+    counted in `overall` but excluded from the per-archetype slice.
     """
     if not held_out:
-        return 0.0
+        return RecallBreakdown(overall=0.0, per_archetype={})
 
     project = client.project
     sql = f"""
@@ -134,6 +163,9 @@ def compute_recall_at_10(
     """
 
     hits = 0
+    scored = 0  # held-out users that produced a usable prediction
+    arch_hits: dict[str, int] = defaultdict(int)
+    arch_total: dict[str, int] = defaultdict(int)
     for emp in held_out:
         steps = grouped[emp]
         if len(steps) < 2:
@@ -147,6 +179,8 @@ def compute_recall_at_10(
         vec = embed_trajectory(truncated, vectors)
         if vec is None:
             continue
+
+        archetype = steps[0].get("archetype") or ""
 
         job = client.query(
             sql,
@@ -175,10 +209,20 @@ def compute_recall_at_10(
             if pr:
                 predicted_next_roles.add(pr)
 
-        if actual_next_role in predicted_next_roles:
+        scored += 1
+        is_hit = actual_next_role in predicted_next_roles
+        if is_hit:
             hits += 1
+        if archetype:
+            arch_total[archetype] += 1
+            if is_hit:
+                arch_hits[archetype] += 1
 
-    return hits / len(held_out)
+    overall = hits / len(held_out) if held_out else 0.0
+    per_archetype = {
+        a: arch_hits[a] / arch_total[a] for a in arch_total if arch_total[a] > 0
+    }
+    return RecallBreakdown(overall=overall, per_archetype=per_archetype)
 
 
 def compute_cluster_stats(
@@ -214,12 +258,20 @@ def compute_all(
     held = stratified_heldout(grouped)
     recall = compute_recall_at_10(client, dataset, grouped, vectors, held)
     stats = compute_cluster_stats(client, dataset)
+    # Empty per-archetype dict (e.g. when held_out is empty) is treated as
+    # min=1.0 so the gate doesn't fail on missing data — the overall
+    # recall check still catches the degenerate case.
+    min_recall = (
+        min(recall.per_archetype.values()) if recall.per_archetype else 1.0
+    )
     return EvalMetrics(
-        recall_at_10=recall,
+        recall_at_10=recall.overall,
         n_clusters=stats["n_clusters"],
         n_noise=stats["n_noise"],
         mean_archetype_purity=stats["mean_archetype_purity"],
         archetypes_covered=stats["archetypes_covered"],
         vocab_size=len(vectors),
         held_out_n=len(held),
+        recall_per_archetype=recall.per_archetype,
+        min_recall_per_archetype=min_recall,
     )
