@@ -67,6 +67,21 @@ export default function ClusterMap({
   // pixel coordinate.
   const [hoveredPathIndex, setHoveredPathIndex] = useState<number | null>(null);
 
+  // If a new chat answer arrives while a path is hovered/focused and
+  // the recommendation list shrinks to where the current index no
+  // longer points at anything, the tooltip's existence-guard hides it
+  // — but the render loop would otherwise still treat
+  // `hoveredPathIndex !== null` as "some path is active" and dim all
+  // visible paths to opacity 0.55 with no highlight. Reset the index
+  // so the render falls back to the neutral all-paths-bright state
+  // until the user re-hovers.
+  useEffect(() => {
+    const len = recommendedPaths?.length ?? 0;
+    if (hoveredPathIndex !== null && hoveredPathIndex >= len) {
+      setHoveredPathIndex(null);
+    }
+  }, [recommendedPaths, hoveredPathIndex]);
+
   useEffect(() => {
     if (!containerRef.current) return;
     const obs = new ResizeObserver((entries) => {
