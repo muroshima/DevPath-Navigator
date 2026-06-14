@@ -26,6 +26,31 @@ interface Props {
 
 const PATH_COLORS = ["#fde047", "#fb923c", "#f472b6"];
 
+// Bezier control point for a recommendation arrow: a slight perpendicular
+// bend keyed by the path's index so overlapping arrows stay
+// distinguishable. Shared between the SVG render path and the tooltip
+// positioning so they never disagree on where the curve's midpoint is.
+function pathGeometry(
+  p: RecommendedPath,
+  index: number,
+  total: number,
+  from: { cx: number; cy: number },
+  project: (x: number, y: number) => { cx: number; cy: number },
+): { to: { cx: number; cy: number }; ctrlX: number; ctrlY: number } {
+  const to = project(p.x, p.y);
+  const midX = (from.cx + to.cx) / 2;
+  const midY = (from.cy + to.cy) / 2;
+  const dx = to.cx - from.cx;
+  const dy = to.cy - from.cy;
+  const norm = Math.hypot(dx, dy) || 1;
+  const bend = 24 * (index - (total - 1) / 2);
+  return {
+    to,
+    ctrlX: midX - (dy / norm) * bend,
+    ctrlY: midY + (dx / norm) * bend,
+  };
+}
+
 export default function ClusterMap({
   points,
   clusters,
@@ -36,12 +61,11 @@ export default function ClusterMap({
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 600, h: 480 });
   const [hovered, setHovered] = useState<MapPoint | null>(null);
-  const [hoveredPath, setHoveredPath] = useState<{
-    path: RecommendedPath;
-    index: number;
-    x: number;
-    y: number;
-  } | null>(null);
+  // Just an index — the tooltip's screen position is derived from the
+  // current projection every render, so resizing the window while a
+  // path is hovered no longer leaves the tooltip pointing at a stale
+  // pixel coordinate.
+  const [hoveredPathIndex, setHoveredPathIndex] = useState<number | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -144,20 +168,17 @@ export default function ClusterMap({
                 ))}
               </defs>
               {(recommendedPaths ?? []).map((p, i) => {
-                const to = project(p.x, p.y);
+                const { to, ctrlX, ctrlY } = pathGeometry(
+                  p,
+                  i,
+                  (recommendedPaths ?? []).length,
+                  from,
+                  project,
+                );
                 const color = PATH_COLORS[i % PATH_COLORS.length];
-                const midX = (from.cx + to.cx) / 2;
-                const midY = (from.cy + to.cy) / 2;
-                // Slight curve so overlapping paths stay distinguishable
-                const dx = to.cx - from.cx;
-                const dy = to.cy - from.cy;
-                const norm = Math.hypot(dx, dy) || 1;
-                const bend = 24 * (i - ((recommendedPaths ?? []).length - 1) / 2);
-                const ctrlX = midX - (dy / norm) * bend;
-                const ctrlY = midY + (dx / norm) * bend;
-                const isActive = hoveredPath?.index === i;
-                const activate = () => setHoveredPath({ path: p, index: i, x: ctrlX, y: ctrlY });
-                const deactivate = () => setHoveredPath(null);
+                const isActive = hoveredPathIndex === i;
+                const activate = () => setHoveredPathIndex(i);
+                const deactivate = () => setHoveredPathIndex(null);
                 // Mirror the visual tooltip in aria-label so screen-reader
                 // users get the same content without ever triggering the
                 // hover/focus tooltip. Includes the recommended next role,
@@ -206,7 +227,7 @@ export default function ClusterMap({
                       strokeWidth={isActive ? 3.5 : 2.5}
                       strokeDasharray="7 5"
                       markerEnd={`url(#arrowhead-${i})`}
-                      opacity={hoveredPath && !isActive ? 0.55 : 0.9}
+                      opacity={hoveredPathIndex !== null && !isActive ? 0.55 : 0.9}
                       pointerEvents="none"
                     >
                       <animate
@@ -290,32 +311,41 @@ export default function ClusterMap({
         );
       })()}
 
-      {hoveredPath && (
-        <div
-          className="absolute z-20 pointer-events-none w-64 rounded-md border border-slate-700 bg-slate-950/95 p-2 text-xs shadow-xl"
-          style={{
-            left: Math.min(size.w - 280, Math.max(12, hoveredPath.x + 14)),
-            top: Math.min(size.h - 150, Math.max(12, hoveredPath.y + 14)),
-          }}
-        >
-          <div className="font-semibold" style={{ color: PATH_COLORS[hoveredPath.index % PATH_COLORS.length] }}>
-            次にすること: {hoveredPath.path.role}
-          </div>
-          <div className="mt-1 text-slate-300">
-            似た軌跡の {hoveredPath.path.supportCount} 名が次に踏んだ一手です。
-          </div>
-          {hoveredPath.path.commonNewTech.length > 0 && (
-            <div className="mt-1 text-slate-400">
-              まず触る技術: {hoveredPath.path.commonNewTech.slice(0, 3).join(", ")}
+      {hoveredPathIndex !== null && userPoint && (recommendedPaths ?? [])[hoveredPathIndex] && (() => {
+        // Recompute the tooltip anchor from the *current* projection so
+        // it tracks the path through window resizes. State stores only
+        // the index, never pixel coords.
+        const paths = recommendedPaths ?? [];
+        const p = paths[hoveredPathIndex];
+        const from = project(userPoint.x, userPoint.y);
+        const { ctrlX, ctrlY } = pathGeometry(p, hoveredPathIndex, paths.length, from, project);
+        return (
+          <div
+            className="absolute z-20 pointer-events-none w-64 rounded-md border border-slate-700 bg-slate-950/95 p-2 text-xs shadow-xl"
+            style={{
+              left: Math.min(size.w - 280, Math.max(12, ctrlX + 14)),
+              top: Math.min(size.h - 150, Math.max(12, ctrlY + 14)),
+            }}
+          >
+            <div className="font-semibold" style={{ color: PATH_COLORS[hoveredPathIndex % PATH_COLORS.length] }}>
+              次にすること: {p.role}
             </div>
-          )}
-          {hoveredPath.path.sampleTrajectory && (
-            <div className="mt-1 text-slate-500">
-              例: {hoveredPath.path.sampleTrajectory}
+            <div className="mt-1 text-slate-300">
+              似た軌跡の {p.supportCount} 名が次に踏んだ一手です。
             </div>
-          )}
-        </div>
-      )}
+            {p.commonNewTech.length > 0 && (
+              <div className="mt-1 text-slate-400">
+                まず触る技術: {p.commonNewTech.slice(0, 3).join(", ")}
+              </div>
+            )}
+            {p.sampleTrajectory && (
+              <div className="mt-1 text-slate-500">
+                例: {p.sampleTrajectory}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       <ClusterLegend clusters={clusters} colorOf={colorOf} />
     </div>
