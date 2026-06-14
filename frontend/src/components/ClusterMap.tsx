@@ -164,25 +164,42 @@ export default function ClusterMap({
                 const bend = 24 * (i - ((recommendedPaths ?? []).length - 1) / 2);
                 const ctrlX = midX - (dy / norm) * bend;
                 const ctrlY = midY + (dx / norm) * bend;
+                const isActive = hoveredPath?.index === i;
+                const activate = () => setHoveredPath({ path: p, index: i, x: ctrlX, y: ctrlY });
+                const deactivate = () => setHoveredPath(null);
                 return (
-                  <g key={`path-${i}`}>
+                  // Handlers live on the outer <g> so moving the pointer
+                  // between the wide hit-path and the badge — both children
+                  // of this group — doesn't fire leave/enter pairs (which
+                  // would flicker the tooltip). tabIndex + onFocus/onBlur
+                  // makes the same details reachable for keyboard and
+                  // (most) touch users; aria-label gives screen readers
+                  // the same content the tooltip would show.
+                  <g
+                    key={`path-${i}`}
+                    tabIndex={0}
+                    role="button"
+                    aria-label={`Recommended path ${i + 1}: ${p.role}, supported by ${p.supportCount} similar engineers`}
+                    onMouseEnter={activate}
+                    onMouseLeave={deactivate}
+                    onFocus={activate}
+                    onBlur={deactivate}
+                  >
                     <path
                       d={`M ${from.cx},${from.cy} Q ${ctrlX},${ctrlY} ${to.cx},${to.cy}`}
                       fill="none"
                       stroke="transparent"
                       strokeWidth={14}
-                      onMouseEnter={() => setHoveredPath({ path: p, index: i, x: ctrlX, y: ctrlY })}
-                      onMouseLeave={() => setHoveredPath(null)}
                       style={{ cursor: "help" }}
                     />
                     <path
                       d={`M ${from.cx},${from.cy} Q ${ctrlX},${ctrlY} ${to.cx},${to.cy}`}
                       fill="none"
                       stroke={color}
-                      strokeWidth={hoveredPath?.index === i ? 3.5 : 2.5}
+                      strokeWidth={isActive ? 3.5 : 2.5}
                       strokeDasharray="7 5"
                       markerEnd={`url(#arrowhead-${i})`}
-                      opacity={hoveredPath && hoveredPath.index !== i ? 0.55 : 0.9}
+                      opacity={hoveredPath && !isActive ? 0.55 : 0.9}
                       pointerEvents="none"
                     >
                       <animate
@@ -193,12 +210,7 @@ export default function ClusterMap({
                         repeatCount="indefinite"
                       />
                     </path>
-                    <g
-                      transform={`translate(${ctrlX}, ${ctrlY})`}
-                      onMouseEnter={() => setHoveredPath({ path: p, index: i, x: ctrlX, y: ctrlY })}
-                      onMouseLeave={() => setHoveredPath(null)}
-                      style={{ cursor: "help" }}
-                    >
+                    <g transform={`translate(${ctrlX}, ${ctrlY})`} style={{ cursor: "help" }}>
                       <circle
                         r={9}
                         fill="#0b1020"
@@ -217,7 +229,7 @@ export default function ClusterMap({
                       >
                         {i + 1}
                       </text>
-                      {hoveredPath?.index === i && (
+                      {isActive && (
                         <text
                           x={13}
                           y={4}
