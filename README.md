@@ -12,12 +12,17 @@ in the actual moves of engineers with similar paths.
 
 ## 30-second tour
 
-[![Click the thumbnail to play the 30-second walkthrough](./docs/demo-30s-thumb.jpg)](./docs/demo-30s.mp4)
+https://github.com/user-attachments/assets/47ceb15c-8079-460e-b1c6-14d6fbff9021
 
-> GitHub strips inline `<video>` tags from README files; click the
-> thumbnail to play the MP4. The 90-second submission walk-through
-> (covers the retrain dashboard) is at
-> [`docs/demo-90s.mp4`](./docs/demo-90s.mp4).
+The 90-second submission walk-through (covers the retrain dashboard):
+
+https://github.com/user-attachments/assets/05940f58-c9bb-46ed-bf07-6512c4c1f500
+
+> Repository-tracked copies are at [`docs/demo-30s.mp4`](./docs/demo-30s.mp4)
+> and [`docs/demo-90s.mp4`](./docs/demo-90s.mp4). The URLs above point
+> at the same files uploaded as GitHub user-attachments — GitHub strips
+> `<video>` tags from README files, so an attachment URL is the only
+> way to embed an inline player.
 
 ## Why
 
