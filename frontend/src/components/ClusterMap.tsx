@@ -194,6 +194,17 @@ export default function ClusterMap({
                 const isActive = hoveredPathIndex === i;
                 const activate = () => setHoveredPathIndex(i);
                 const deactivate = () => setHoveredPathIndex(null);
+                // If the user tabbed/clicked into the path (keyboard
+                // focus is on it) and then drifts the mouse away, the
+                // visual tooltip should stay until they blur — leaving
+                // mouseLeave to clear it would yank the highlight out
+                // from under the focused state. Defer to onBlur in that
+                // case.
+                const deactivateOnMouseLeave = (e: React.MouseEvent<SVGGElement>) => {
+                  if (e.currentTarget !== document.activeElement) {
+                    setHoveredPathIndex(null);
+                  }
+                };
                 // Mirror the visual tooltip in aria-label so screen-reader
                 // users get the same content without ever triggering the
                 // hover/focus tooltip. The visible UI is Japanese (the
@@ -225,7 +236,7 @@ export default function ClusterMap({
                     tabIndex={0}
                     aria-label={ariaLabel}
                     onMouseEnter={activate}
-                    onMouseLeave={deactivate}
+                    onMouseLeave={deactivateOnMouseLeave}
                     onFocus={activate}
                     onBlur={deactivate}
                   >
