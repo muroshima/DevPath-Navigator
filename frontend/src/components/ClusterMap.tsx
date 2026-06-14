@@ -335,12 +335,19 @@ export default function ClusterMap({
         const p = paths[hoveredPathIndex];
         const from = project(userPoint.x, userPoint.y);
         const { ctrlX, ctrlY } = pathGeometry(p, hoveredPathIndex, paths.length, from, project);
+        // Clamp into the visible viewport. Pin the right/bottom edges to
+        // at least 12 px from the left/top so a container narrower than
+        // the tooltip (size.w < 280, size.h < 150 — guarded against by
+        // setSize today but worth being defensive about) doesn't push
+        // the tooltip off-screen to negative coordinates.
+        const maxLeft = Math.max(12, size.w - 280);
+        const maxTop = Math.max(12, size.h - 150);
         return (
           <div
             className="absolute z-20 pointer-events-none w-64 rounded-md border border-slate-700 bg-slate-950/95 p-2 text-xs shadow-xl"
             style={{
-              left: Math.min(size.w - 280, Math.max(12, ctrlX + 14)),
-              top: Math.min(size.h - 150, Math.max(12, ctrlY + 14)),
+              left: Math.min(maxLeft, Math.max(12, ctrlX + 14)),
+              top: Math.min(maxTop, Math.max(12, ctrlY + 14)),
             }}
           >
             <div className="font-semibold" style={{ color: PATH_COLORS[hoveredPathIndex % PATH_COLORS.length] }}>
