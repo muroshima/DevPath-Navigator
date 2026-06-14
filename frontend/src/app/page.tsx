@@ -28,6 +28,19 @@ interface UserPoint {
   archetype: string | null;
 }
 
+// Shape we *assume* the recommend_next_steps tool returns. The cast
+// path originates from `unknown` (the tool result is JSON the agent
+// produced), so any field on this row may legitimately be missing —
+// marking them optional matches the runtime guards (`?? []`,
+// optional chaining) and prevents future code from assuming
+// presence without checking.
+interface RecommendNextStepsRow {
+  next_role: string;
+  support_count: number;
+  common_new_tech?: Array<{ tech: string; count: number }>;
+  representative_trajectories?: Array<{ employee_id: string; trajectory: string }>;
+}
+
 export default function Page() {
   const [mapData, setMapData] = useState<MapResponse | null>(null);
   const [mapError, setMapError] = useState<string | null>(null);
@@ -90,12 +103,7 @@ export default function Page() {
       }
       if (r.name === "recommend_next_steps" && r.response) {
         const resp = r.response as Record<string, unknown>;
-        const recs = (resp.recommendations as Array<{
-          next_role: string;
-          support_count: number;
-          common_new_tech: Array<{ tech: string; count: number }>;
-          representative_trajectories: Array<{ employee_id: string; trajectory: string }>;
-        }>) ?? [];
+        const recs = (resp.recommendations as RecommendNextStepsRow[]) ?? [];
         setRecommendedPaths(computeRecommendedPaths(recs));
       }
     }
@@ -105,12 +113,7 @@ export default function Page() {
   // cohort's map positions, so the arrow points at the actual engineers
   // that exemplify the move (not an abstract cluster center).
   function computeRecommendedPaths(
-    recs: Array<{
-      next_role: string;
-      support_count: number;
-      common_new_tech: Array<{ tech: string; count: number }>;
-      representative_trajectories: Array<{ employee_id: string; trajectory: string }>;
-    }>,
+    recs: RecommendNextStepsRow[],
   ): RecommendedPath[] {
     if (!mapData) return [];
     const byId = new Map(mapData.points.map((p) => [p.employee_id, p]));
