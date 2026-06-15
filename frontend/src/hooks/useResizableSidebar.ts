@@ -114,10 +114,16 @@ export function useResizableSidebar({
       let currentWidth = startWidth;
       const onMove = (ev: PointerEvent) => {
         const delta = startX - ev.clientX;
-        currentWidth = clamp(startWidth + delta, minWidth, maxWidth);
+        const next = clamp(startWidth + delta, minWidth, maxWidth);
+        // Skip the state update when clamp pinned us to the same value
+        // (e.g. dragging further past the min/max). Pointermove fires at
+        // ~60Hz so even a cheap no-op setState costs us when the user
+        // holds the pointer against an edge.
+        if (next === currentWidth) return;
+        currentWidth = next;
         // Update React state for the visual; defer the localStorage write
         // until pointerup so we don't hit storage on every frame.
-        setWidthState(currentWidth);
+        setWidthState(next);
       };
       const onUp = () => {
         setIsDragging(false);
