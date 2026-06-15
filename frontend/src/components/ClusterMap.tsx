@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { MapCluster, MapPoint, RecommendedPath } from "@/lib/types";
-import { useMapZoom } from "@/hooks/useMapZoom";
 
 const PALETTE = [
   "#60a5fa", "#f472b6", "#a78bfa", "#34d399", "#fbbf24", "#f87171",
@@ -120,21 +119,10 @@ export default function ClusterMap({
   const colorOf = (cid: number) => (cid < 0 ? "#475569" : PALETTE[cid % PALETTE.length]);
   const highlightSet = new Set(highlightEmployees ?? []);
 
-  const zoom = useMapZoom();
-  const { view, toScreen, reset, bind } = zoom;
-  const zoomedOut = view.zoom === 1 && view.panX === 0 && view.panY === 0;
-
   return (
     <div ref={containerRef} className="relative h-full w-full">
-      <svg
-        ref={bind}
-        width={size.w}
-        height={size.h}
-        className="block touch-none"
-        onDoubleClick={reset}
-      >
+      <svg width={size.w} height={size.h} className="block">
         <rect x={0} y={0} width={size.w} height={size.h} fill="#0b1020" />
-        <g transform={`translate(${view.panX}, ${view.panY}) scale(${view.zoom})`}>
         {[0.25, 0.5, 0.75].map((f) => (
           <g key={f} stroke="#1e293b">
             <line x1={20 + (size.w - 40) * f} y1={20} x2={20 + (size.w - 40) * f} y2={size.h - 20} />
@@ -333,26 +321,14 @@ export default function ClusterMap({
             </g>
           );
         })()}
-        </g>
       </svg>
 
-      {!zoomedOut && (
-        <button
-          type="button"
-          onClick={reset}
-          className="absolute bottom-2 right-2 z-10 rounded-md border border-slate-700 bg-slate-900/80 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
-          title="ズームをリセット（ダブルクリック / ダブルタップでも可）"
-        >
-          {`ズーム ${view.zoom.toFixed(1)}× · リセット`}
-        </button>
-      )}
-
       {hovered && (() => {
-        const p = toScreen(project(hovered.x, hovered.y));
+        const { cx, cy } = project(hovered.x, hovered.y);
         return (
           <div
             className="absolute z-10 pointer-events-none rounded-md border border-slate-700 bg-slate-900/95 px-2 py-1 text-xs shadow-lg"
-            style={{ left: p.x + 12, top: p.y + 12 }}
+            style={{ left: cx + 12, top: cy + 12 }}
           >
             <div className="font-mono text-slate-200">{hovered.employee_id}</div>
             <div className="text-slate-400">
@@ -370,7 +346,6 @@ export default function ClusterMap({
         const p = paths[hoveredPathIndex];
         const from = project(userPoint.x, userPoint.y);
         const { ctrlX, ctrlY } = pathGeometry(p, hoveredPathIndex, paths.length, from, project);
-        const anchor = toScreen({ cx: ctrlX, cy: ctrlY });
         // Clamp into the visible viewport. Pin the right/bottom edges to
         // at least 12 px from the left/top so a container narrower than
         // the tooltip (size.w < 280, size.h < 150 — guarded against by
@@ -386,8 +361,8 @@ export default function ClusterMap({
             // instead of overflowing past the right edge.
             className="absolute z-20 pointer-events-none w-64 break-all rounded-md border border-slate-700 bg-slate-950/95 p-2 text-xs shadow-xl"
             style={{
-              left: Math.min(maxLeft, Math.max(12, anchor.x + 14)),
-              top: Math.min(maxTop, Math.max(12, anchor.y + 14)),
+              left: Math.min(maxLeft, Math.max(12, ctrlX + 14)),
+              top: Math.min(maxTop, Math.max(12, ctrlY + 14)),
             }}
           >
             <div className="font-semibold" style={{ color: PATH_COLORS[hoveredPathIndex % PATH_COLORS.length] }}>
