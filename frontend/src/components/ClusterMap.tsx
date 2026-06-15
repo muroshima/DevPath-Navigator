@@ -443,7 +443,15 @@ function ClusterLegend({
       const c = window.localStorage.getItem("clusterLegend.corner") as LegendCorner | null;
       if (c && c in CORNER_CLASSES) setCorner(c);
       const h = window.localStorage.getItem("clusterLegend.collapsed");
-      if (h === "1") setCollapsed(true);
+      if (h === "1") {
+        setCollapsed(true);
+      } else if (h === null && window.innerWidth < 768) {
+        // No prior preference + narrow viewport → start collapsed so the
+        // panel doesn't eat half the screen on a phone. The user can still
+        // expand via the pill, and that explicit choice (written as "0")
+        // wins on subsequent loads.
+        setCollapsed(true);
+      }
     } catch (err) {
       console.warn("ClusterLegend: localStorage read failed", err);
     }
