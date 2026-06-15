@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import ChatPanel from "@/components/ChatPanel";
 import ClusterMap from "@/components/ClusterMap";
@@ -88,6 +88,14 @@ export default function Page() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, [mobileSidebarOpen]);
+
+  // When the modal drawer opens, move focus into it so keyboard / SR users
+  // land inside the dialog (otherwise focus stays on the FAB behind the
+  // backdrop, which contradicts `aria-modal`).
+  const mobileDrawerRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (mobileSidebarOpen) mobileDrawerRef.current?.focus();
   }, [mobileSidebarOpen]);
 
   const userId = useMemo(() => `web-${Math.random().toString(36).slice(2, 10)}`, []);
@@ -303,11 +311,13 @@ export default function Page() {
                 className="fixed inset-0 z-10 bg-slate-950/60"
               />
               <aside
+                ref={mobileDrawerRef}
                 id="mobile-sidebar"
                 role="dialog"
                 aria-modal="true"
                 aria-label="キャリアサイドバー"
-                className="fixed inset-y-0 right-0 z-20 flex w-[min(92vw,420px)] flex-col border-l border-slate-700 bg-slate-950 shadow-2xl"
+                tabIndex={-1}
+                className="fixed inset-y-0 right-0 z-20 flex w-[min(92vw,420px)] flex-col border-l border-slate-700 bg-slate-950 shadow-2xl focus:outline-none"
               >
                 {sidebarContent}
               </aside>

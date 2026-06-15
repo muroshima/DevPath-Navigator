@@ -40,10 +40,10 @@ export default function ResizeHandle({
         next = width - step;
         break;
       case "Home":
-        next = maxWidth;
+        next = minWidth;
         break;
       case "End":
-        next = minWidth;
+        next = maxWidth;
         break;
       case "Enter":
       case " ":
@@ -72,6 +72,11 @@ export default function ResizeHandle({
       onPointerDown={onPointerDown}
       onDoubleClick={onDoubleClick}
       onKeyDown={onKeyDown}
+      // Touch devices that land in the desktop breakpoint (iPad / Surface)
+      // otherwise route the pointer down event into scroll/zoom gestures
+      // before our drag listeners can react. `touch-action: none` keeps the
+      // gesture exclusively for the splitter.
+      style={{ touchAction: "none" }}
       className={`group relative w-1.5 shrink-0 cursor-col-resize bg-slate-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
         isDragging ? "bg-emerald-400" : "hover:bg-emerald-500/70"
       }`}

@@ -68,6 +68,16 @@ export function useResizableSidebar({
     };
   }, []);
 
+  // If resizing flips off mid-drag (e.g. the viewport crosses the mobile
+  // breakpoint and the handle unmounts), abort the active drag so the
+  // window-level pointer listeners don't keep firing into a dead handle.
+  useEffect(() => {
+    if (enabled) return;
+    dragAbortRef.current?.abort();
+    dragAbortRef.current = null;
+    setIsDragging(false);
+  }, [enabled]);
+
   const setWidth = useCallback(
     (w: number) => {
       const clamped = clamp(w, minWidth, maxWidth);
