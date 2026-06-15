@@ -6,6 +6,8 @@ const STORAGE_KEY = "devpath:sidebarWidth";
 
 export interface ResizableSidebar {
   width: number;
+  minWidth: number;
+  maxWidth: number;
   setWidth: (w: number) => void;
   resetWidth: () => void;
   startDrag: (e: React.PointerEvent<HTMLElement>) => void;
@@ -23,6 +25,14 @@ function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v));
 }
 
+function persistWidth(w: number) {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, String(w));
+  } catch {
+    // localStorage may be unavailable (private mode etc.) — silently ignore
+  }
+}
+
 export function useResizableSidebar({
   defaultWidth,
   minWidth,
@@ -31,7 +41,9 @@ export function useResizableSidebar({
 }: Options): ResizableSidebar {
   const [width, setWidthState] = useState<number>(defaultWidth);
   const [isDragging, setIsDragging] = useState(false);
-  const dragStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const dragAbortRef = useRef<AbortController | null>(null);
+  const widthRef = useRef(width);
+  widthRef.current = width;
 
   useEffect(() => {
     if (!enabled) return;
@@ -42,19 +54,25 @@ export function useResizableSidebar({
         if (Number.isFinite(n)) setWidthState(clamp(n, minWidth, maxWidth));
       }
     } catch {
-      // localStorage may be unavailable (private mode etc.) — fall back to default
+      // ignore
     }
   }, [enabled, minWidth, maxWidth]);
+
+  // Abort any in-flight drag listeners when the hook unmounts. Without this,
+  // a route change while the user is still holding the pointer down would
+  // leave window-level `pointermove` listeners running against a dead React
+  // tree.
+  useEffect(() => {
+    return () => {
+      dragAbortRef.current?.abort();
+    };
+  }, []);
 
   const setWidth = useCallback(
     (w: number) => {
       const clamped = clamp(w, minWidth, maxWidth);
       setWidthState(clamped);
-      try {
-        window.localStorage.setItem(STORAGE_KEY, String(clamped));
-      } catch {
-        // ignore
-      }
+      persistWidth(clamped);
     },
     [minWidth, maxWidth],
   );
@@ -68,29 +86,38 @@ export function useResizableSidebar({
       if (!enabled) return;
       e.preventDefault();
       const startX = e.clientX;
-      const startWidth = width;
-      dragStateRef.current = { startX, startWidth };
+      const startWidth = widthRef.current;
       setIsDragging(true);
 
+      // Abort previous drag listeners if a new drag starts while one is
+      // still in flight (defensive: shouldn't happen, but guards against
+      // listener leaks if it does).
+      dragAbortRef.current?.abort();
+      const ctrl = new AbortController();
+      dragAbortRef.current = ctrl;
+
+      let currentWidth = startWidth;
       const onMove = (ev: PointerEvent) => {
-        const state = dragStateRef.current;
-        if (!state) return;
-        const delta = state.startX - ev.clientX;
-        setWidth(state.startWidth + delta);
+        const delta = startX - ev.clientX;
+        currentWidth = clamp(startWidth + delta, minWidth, maxWidth);
+        // Update React state for the visual; defer the localStorage write
+        // until pointerup so we don't hit storage on every frame.
+        setWidthState(currentWidth);
       };
       const onUp = () => {
-        dragStateRef.current = null;
         setIsDragging(false);
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onUp);
-        window.removeEventListener("pointercancel", onUp);
+        persistWidth(currentWidth);
+        ctrl.abort();
+        dragAbortRef.current = null;
       };
-      window.addEventListener("pointermove", onMove);
-      window.addEventListener("pointerup", onUp);
-      window.addEventListener("pointercancel", onUp);
+
+      const signal = ctrl.signal;
+      window.addEventListener("pointermove", onMove, { signal });
+      window.addEventListener("pointerup", onUp, { signal });
+      window.addEventListener("pointercancel", onUp, { signal });
     },
-    [enabled, width, setWidth],
+    [enabled, minWidth, maxWidth],
   );
 
-  return { width, setWidth, resetWidth, startDrag, isDragging };
+  return { width, minWidth, maxWidth, setWidth, resetWidth, startDrag, isDragging };
 }

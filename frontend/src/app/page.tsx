@@ -73,6 +73,23 @@ export default function Page() {
   });
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
+  // Auto-close the drawer when the viewport widens past the mobile breakpoint
+  // (e.g. rotate to landscape). Without this the drawer state would silently
+  // persist into the desktop layout where it's irrelevant.
+  useEffect(() => {
+    if (!isMobile && mobileSidebarOpen) setMobileSidebarOpen(false);
+  }, [isMobile, mobileSidebarOpen]);
+
+  // Escape closes the mobile drawer — standard overlay/dialog UX.
+  useEffect(() => {
+    if (!mobileSidebarOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setMobileSidebarOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mobileSidebarOpen]);
+
   const userId = useMemo(() => `web-${Math.random().toString(36).slice(2, 10)}`, []);
 
   useEffect(() => {
@@ -247,8 +264,12 @@ export default function Page() {
       {!isMobile && (
         <>
           <ResizeHandle
+            width={sidebar.width}
+            minWidth={sidebar.minWidth}
+            maxWidth={sidebar.maxWidth}
             onPointerDown={sidebar.startDrag}
             onDoubleClick={sidebar.resetWidth}
+            onWidthChange={sidebar.setWidth}
             isDragging={sidebar.isDragging}
           />
           <aside
@@ -268,6 +289,8 @@ export default function Page() {
             onClick={() => setMobileSidebarOpen((v) => !v)}
             className="fixed bottom-4 right-4 z-30 rounded-full bg-emerald-500 px-4 py-3 text-sm font-medium text-slate-900 shadow-lg shadow-emerald-900/40 hover:bg-emerald-400 active:scale-95"
             aria-label={mobileSidebarOpen ? "サイドバーを閉じる" : "サイドバーを開く"}
+            aria-expanded={mobileSidebarOpen}
+            aria-controls="mobile-sidebar"
           >
             {mobileSidebarOpen ? "閉じる" : "チャット"}
           </button>
@@ -279,7 +302,13 @@ export default function Page() {
                 onClick={() => setMobileSidebarOpen(false)}
                 className="fixed inset-0 z-10 bg-slate-950/60"
               />
-              <aside className="fixed inset-y-0 right-0 z-20 flex w-[min(92vw,420px)] flex-col border-l border-slate-700 bg-slate-950 shadow-2xl">
+              <aside
+                id="mobile-sidebar"
+                role="dialog"
+                aria-modal="true"
+                aria-label="キャリアサイドバー"
+                className="fixed inset-y-0 right-0 z-20 flex w-[min(92vw,420px)] flex-col border-l border-slate-700 bg-slate-950 shadow-2xl"
+              >
                 {sidebarContent}
               </aside>
             </>
