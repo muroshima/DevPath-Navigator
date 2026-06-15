@@ -92,10 +92,20 @@ export default function Page() {
 
   // When the modal drawer opens, move focus into it so keyboard / SR users
   // land inside the dialog (otherwise focus stays on the FAB behind the
-  // backdrop, which contradicts `aria-modal`).
+  // backdrop, which contradicts `aria-modal`). On close, restore focus to
+  // whatever triggered the open — usually the FAB — so the user doesn't
+  // land on document.body.
   const mobileDrawerRef = useRef<HTMLElement>(null);
+  const triggerBeforeDrawerRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
-    if (mobileSidebarOpen) mobileDrawerRef.current?.focus();
+    if (mobileSidebarOpen) {
+      triggerBeforeDrawerRef.current =
+        (document.activeElement as HTMLElement | null) ?? null;
+      mobileDrawerRef.current?.focus();
+    } else if (triggerBeforeDrawerRef.current) {
+      triggerBeforeDrawerRef.current.focus();
+      triggerBeforeDrawerRef.current = null;
+    }
   }, [mobileSidebarOpen]);
 
   const userId = useMemo(() => `web-${Math.random().toString(36).slice(2, 10)}`, []);

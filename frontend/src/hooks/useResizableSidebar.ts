@@ -49,10 +49,15 @@ export function useResizableSidebar({
     if (!enabled) return;
     try {
       const saved = window.localStorage.getItem(STORAGE_KEY);
-      if (saved !== null) {
-        const n = Number.parseInt(saved, 10);
-        if (Number.isFinite(n)) setWidthState(clamp(n, minWidth, maxWidth));
-      }
+      if (saved === null) return;
+      const n = Number.parseInt(saved, 10);
+      if (!Number.isFinite(n)) return;
+      const clamped = clamp(n, minWidth, maxWidth);
+      setWidthState(clamped);
+      // If the persisted value was out of the current range (min/max
+      // changed across releases, or the entry was hand-edited), write the
+      // clamped value back so storage and state stay in sync.
+      if (clamped !== n) persistWidth(clamped);
     } catch {
       // ignore
     }
