@@ -65,9 +65,10 @@ async function mockApis(page: Page) {
 }
 
 // In-flow desktop aside vs the mobile drawer aside need distinct selectors
-// because both are `<aside>`. The desktop one has the shrink-0 class from
-// the resizable layout; the mobile one carries role="dialog".
-const DESKTOP_ASIDE = 'aside.shrink-0';
+// because both are `<aside>`. The mobile drawer carries role="dialog";
+// the desktop one does not — so picking apart the two via that semantic
+// attribute keeps the tests robust against Tailwind class renames.
+const DESKTOP_ASIDE = 'aside:not([role="dialog"])';
 const MOBILE_DRAWER = 'aside[role="dialog"]';
 const RESIZE_HANDLE = '[role="separator"][aria-orientation="vertical"]';
 
