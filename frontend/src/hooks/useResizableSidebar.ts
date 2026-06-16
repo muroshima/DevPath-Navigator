@@ -21,8 +21,16 @@ interface Options {
   enabled?: boolean;
 }
 
+// `Math.round` so the width is always an integer pixel value. Pointer
+// `clientX` can be fractional on high-DPR devices, so without rounding
+// `startWidth + delta` could land at e.g. 540.4, which would then be
+// written into inline style (`width: 540.4px`), localStorage ("540.4"),
+// and aria-valuenow (after a separate Math.round) — three different
+// representations of "the same width". Normalising at the clamp boundary
+// keeps the hook's contract simple: state, persistence, and ARIA all
+// agree on the same integer.
 function clamp(v: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, v));
+  return Math.max(min, Math.min(max, Math.round(v)));
 }
 
 function persistWidth(w: number) {
