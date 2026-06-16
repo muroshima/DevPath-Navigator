@@ -28,6 +28,51 @@ interface LogEntry {
 // so a future shape change can ignore old payloads instead of crashing.
 const STORAGE_KEY = "devpath:chat:v1";
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+// Restore validators. The persisted JSON is untyped at runtime — a corrupt
+// or schema-skewed snapshot must not be allowed to flow into props that
+// expect specific shapes (ClusterMap reads `userPoint.x`/`p.commonNewTech`,
+// ToolLog reads `entry.call.name`). Each validator returns the value if
+// it matches the expected shape, otherwise null/empty so we fall back to
+// defaults instead of crashing the render.
+function validateUserPoint(v: unknown): UserPoint | null {
+  if (!isRecord(v)) return null;
+  if (typeof v.x !== "number" || typeof v.y !== "number") return null;
+  return {
+    x: v.x,
+    y: v.y,
+    clusterId: typeof v.clusterId === "number" ? v.clusterId : null,
+    archetype: typeof v.archetype === "string" ? v.archetype : null,
+  };
+}
+
+function validateLogEntries(v: unknown): LogEntry[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((entry): entry is LogEntry =>
+    isRecord(entry) &&
+    typeof entry.id === "string" &&
+    isRecord(entry.call) &&
+    typeof entry.call.name === "string"
+  );
+}
+
+function validateRecommendedPaths(v: unknown): RecommendedPath[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((p): p is RecommendedPath =>
+    isRecord(p) &&
+    typeof p.role === "string" &&
+    typeof p.x === "number" &&
+    typeof p.y === "number" &&
+    typeof p.supportCount === "number" &&
+    Array.isArray(p.commonNewTech) &&
+    p.commonNewTech.every((t) => typeof t === "string") &&
+    (p.sampleTrajectory === null || typeof p.sampleTrajectory === "string")
+  );
+}
+
 interface PersistedChatState {
   // userId is part of the lookup key the agent uses to resume a session
   // (`get_session(user_id, session_id)` in agent/server.py). If we restore
@@ -162,15 +207,17 @@ export default function Page() {
     if (!saved || typeof saved !== "object") return;
     if (typeof saved.userId === "string" && saved.userId) setUserId(saved.userId);
     if (Array.isArray(saved.messages)) setMessages(saved.messages);
-    if (Array.isArray(saved.logEntries)) setLogEntries(saved.logEntries);
+    setLogEntries(validateLogEntries(saved.logEntries));
     if (saved.sessionId === null || typeof saved.sessionId === "string") {
       setSessionId(saved.sessionId);
     }
-    if (saved.userPoint === null || (typeof saved.userPoint === "object" && saved.userPoint)) {
-      setUserPoint(saved.userPoint);
+    setUserPoint(validateUserPoint(saved.userPoint));
+    if (Array.isArray(saved.highlightEmployees)) {
+      setHighlightEmployees(
+        saved.highlightEmployees.filter((id): id is string => typeof id === "string"),
+      );
     }
-    if (Array.isArray(saved.highlightEmployees)) setHighlightEmployees(saved.highlightEmployees);
-    if (Array.isArray(saved.recommendedPaths)) setRecommendedPaths(saved.recommendedPaths);
+    setRecommendedPaths(validateRecommendedPaths(saved.recommendedPaths));
   }, []);
 
   // Persist whenever any restored field changes. `busy` and map fixtures

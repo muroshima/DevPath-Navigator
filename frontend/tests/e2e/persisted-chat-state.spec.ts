@@ -70,18 +70,23 @@ const CHAT_FIXTURE = {
   ],
 };
 
+// Shape matches the `EvalRun` interface in `frontend/src/app/dashboard/page.tsx`
+// (`d.runs ?? []`). Fully-populated so the dashboard renders the row without
+// hitting `undefined.toFixed()` / `undefined.length`, and so future tests
+// could assert on actual dashboard content.
 const EVAL_HISTORY_FIXTURE = {
-  records: [
+  runs: [
     {
       run_id: "r1",
-      ts_utc: "2026-06-15T00:00:00Z",
+      run_at: "2026-06-15T00:00:00Z",
       batches: ["initial"],
-      decision: "baseline",
       recall_at_10: 0.82,
       n_clusters: 12,
       mean_archetype_purity: 1.0,
       archetypes_covered: ["backend_to_sre"],
-      reasons: ["baseline"],
+      vocab_size: 1500,
+      decision: "baseline",
+      decision_reasons: ["baseline run"],
     },
   ],
 };
@@ -120,10 +125,12 @@ test("dashboard round-trip preserves chat history, tool log, and recommended pat
   await submitProfile(page);
 
   // Sanity-check the snapshot is in sessionStorage before we navigate.
-  const snapshotBefore = await page.evaluate(() =>
-    window.sessionStorage.getItem("devpath:chat:v1"),
-  );
-  expect(snapshotBefore).toContain("GenAI Engineer");
+  // The persist effect runs after the render that committed the response,
+  // so poll until the snapshot contains the response text rather than
+  // reading once and racing the effect.
+  await expect
+    .poll(() => page.evaluate(() => window.sessionStorage.getItem("devpath:chat:v1") ?? ""))
+    .toContain("GenAI Engineer");
 
   // Cross over to /dashboard and back, the way the bug reproduces in the UI.
   await page.getByRole("link", { name: /再学習ダッシュボード/ }).click();
