@@ -38,8 +38,8 @@ scripts/demo/     Playwright + edge-tts video pipeline
 # Python (uv-managed; pyproject pins to >=3.11)
 uv sync
 
-# Frontend
-cd frontend && npm install
+# Frontend — use `--prefix` so every command in this file runs from repo root
+npm --prefix frontend install
 ```
 
 Authenticate to GCP if you need to touch real Vertex AI / BigQuery:
@@ -100,7 +100,7 @@ CI (`.github/workflows/ci.yml`) gates merges on: ruff, pytest, frontend build, P
 - **Synthetic data only**. Never commit real personnel data, real names, real `employee_id` mappings to anyone outside the generator's fixed seed.
 - **No secrets** in code or commits. Vertex AI / BigQuery credentials come from ADC. Other secrets should live in your OS credential store locally (macOS Keychain, Windows Credential Manager, `pass`, etc.) and Secret Manager in Cloud Run — never in repo files or env files committed to git.
 - **eval gate is load-bearing** — see `eval/gate.py`. Don't relax `RECALL_EPS` or `MIN_RECALL_EPS` without re-reading the comments explaining why those thresholds are wider than the textbook 0.05.
-- **Don't deploy to prod from a laptop** — production deploys go through Cloud Build (`pipelines/cloudbuild.retrain.yaml`). Preview revisions (no-traffic, tagged) are fine for PR review.
+- **Prod deploys are explicit, not automatic.** A merge to `main` does NOT auto-deploy — there is no GitHub Actions deploy job today. Application code rolls out via a manual `gcloud run deploy --source . --region asia-northeast1` after the PR merges (see [CONTRIBUTING.md](./CONTRIBUTING.md) §7). Retrain rollouts (model + embeddings) ride the Cloud Build pipeline at `pipelines/cloudbuild.retrain.yaml`, which runs the eval gate and only flips the Cloud Run revision on pass. PR preview revisions go out as no-traffic tagged revisions (`gcloud run deploy --tag preview-pr<N> --no-traffic`) — safe from a laptop because they don't take any prod traffic.
 
 ## Where to read first when picking up a task
 
