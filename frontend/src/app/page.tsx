@@ -49,35 +49,49 @@ function validateUserPoint(v: unknown): UserPoint | null {
   };
 }
 
+function isValidToolCall(v: unknown): v is ToolCall {
+  return isRecord(v) && typeof v.name === "string";
+}
+
+function isValidToolResult(v: unknown): v is ToolResult {
+  // `response` is intentionally `Record | null | undefined`. ToolLog treats
+  // null/undefined as "実行中" and only runs `summarizeResponse()` on
+  // records — so null is a legitimate persisted value, not corruption.
+  return (
+    isRecord(v) &&
+    typeof v.name === "string" &&
+    (v.response === undefined || v.response === null || isRecord(v.response))
+  );
+}
+
 function validateLogEntries(v: unknown): LogEntry[] {
   if (!Array.isArray(v)) return [];
   return v.filter((entry): entry is LogEntry => {
     if (!isRecord(entry)) return false;
     if (typeof entry.id !== "string") return false;
-    if (!isRecord(entry.call) || typeof entry.call.name !== "string") return false;
-    // entry.result is optional, but if present its `response` must be a
-    // plain object — ToolLog runs `summarizeResponse(response)` which uses
-    // the `in` operator and would throw on null/array/primitive payloads.
-    if (entry.result !== undefined) {
-      if (!isRecord(entry.result)) return false;
-      if (typeof entry.result.name !== "string") return false;
-      if (entry.result.response !== undefined && !isRecord(entry.result.response)) return false;
-    }
-    return true;
+    if (!isValidToolCall(entry.call)) return false;
+    return entry.result === undefined || isValidToolResult(entry.result);
   });
 }
 
 function validateMessages(v: unknown): ChatMessage[] {
   if (!Array.isArray(v)) return [];
-  return v.filter((m): m is ChatMessage =>
-    isRecord(m) &&
-    typeof m.id === "string" &&
-    (m.role === "user" || m.role === "agent") &&
-    typeof m.text === "string" &&
-    // toolCalls / toolResults are optional, but when present must be arrays
-    (m.toolCalls === undefined || Array.isArray(m.toolCalls)) &&
-    (m.toolResults === undefined || Array.isArray(m.toolResults))
-  );
+  const out: ChatMessage[] = [];
+  for (const m of v) {
+    if (!isRecord(m)) continue;
+    if (typeof m.id !== "string") continue;
+    if (m.role !== "user" && m.role !== "agent") continue;
+    if (typeof m.text !== "string") continue;
+    // Sanitize toolCalls / toolResults: keep the message, drop invalid
+    // items inside. ChatPanel reads `tc.name` directly, so a `null`
+    // element would crash the render.
+    const toolCalls = Array.isArray(m.toolCalls) ? m.toolCalls.filter(isValidToolCall) : undefined;
+    const toolResults = Array.isArray(m.toolResults)
+      ? m.toolResults.filter(isValidToolResult)
+      : undefined;
+    out.push({ id: m.id, role: m.role, text: m.text, toolCalls, toolResults });
+  }
+  return out;
 }
 
 function validateRecommendedPaths(v: unknown): RecommendedPath[] {
