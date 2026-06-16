@@ -76,7 +76,9 @@ uv run pytest -q
 # Frontend: typecheck + build (no separate typecheck script — build catches it)
 npm --prefix frontend run build
 
-# Frontend: e2e (Playwright, requires both servers running)
+# Frontend: e2e (Playwright). Both API routes are mocked, so no agent / no GCP
+# credentials needed. Playwright auto-boots a production frontend build via
+# its `webServer` config (`npm run build && npm run start`).
 npm --prefix frontend run test:e2e
 ```
 
