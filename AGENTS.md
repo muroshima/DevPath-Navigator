@@ -96,7 +96,7 @@ CI (`.github/workflows/ci.yml`) gates merges on: ruff, pytest, frontend build, P
 ## Hard rules
 
 - **Synthetic data only**. Never commit real personnel data, real names, real `employee_id` mappings to anyone outside the generator's fixed seed.
-- **No secrets** in code or commits. Vertex AI / BigQuery credentials come from ADC. Anything else uses macOS Keychain locally and Secret Manager in Cloud Run.
+- **No secrets** in code or commits. Vertex AI / BigQuery credentials come from ADC. Other secrets should live in your OS credential store locally (macOS Keychain, Windows Credential Manager, `pass`, etc.) and Secret Manager in Cloud Run — never in repo files or env files committed to git.
 - **eval gate is load-bearing** — see `eval/gate.py`. Don't relax `RECALL_EPS` or `MIN_RECALL_EPS` without re-reading the comments explaining why those thresholds are wider than the textbook 0.05.
 - **Don't deploy to prod from a laptop** — production deploys go through Cloud Build (`pipelines/cloudbuild.retrain.yaml`). Preview revisions (no-traffic, tagged) are fine for PR review.
 
