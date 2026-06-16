@@ -17,8 +17,10 @@ guard rails below are enforced socially — please follow them.
 - **Every change ships as a PR.** Open a PR from your branch into
   `main`. Self-merge is fine for solo PRs, but the PR + CI flow is
   the audit trail.
-- **CI must be green before merging.** Three jobs run on every PR:
-  `Lint & test (Python)`, `Build (frontend)`, `Secret scan`. Don't
+- **CI must be green before merging.** Four jobs run on every PR at
+  time of writing: `Lint & test (Python)`, `Build (frontend)`,
+  `E2E (Playwright)`, `Secret scan`. `.github/workflows/ci.yml` is the
+  source of truth — if this list drifts, trust the workflow. Don't
   merge a red PR — even if you're confident the failure is unrelated,
   open a follow-up rather than bypassing.
 - **Squash on merge.** Keeps `main` linear and each PR collapses to
