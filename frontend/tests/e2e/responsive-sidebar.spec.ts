@@ -82,8 +82,7 @@ test.describe("Desktop: resizable sidebar", () => {
     await expect(handle).toBeVisible();
 
     const aside = page.locator(DESKTOP_ASIDE);
-    const before = await aside.boundingBox();
-    expect(before?.width).toBe(440);
+    await expect(aside).toHaveCSS("width", "440px");
 
     // The aside is right-anchored, so dragging the handle LEFT widens
     // the sidebar. 100px move → 540px wide.
@@ -96,7 +95,7 @@ test.describe("Desktop: resizable sidebar", () => {
     await page.mouse.move(startX - 100, startY, { steps: 10 });
     await page.mouse.up();
 
-    await expect.poll(async () => (await aside.boundingBox())?.width).toBe(540);
+    await expect(aside).toHaveCSS("width", "540px");
     const stored = await page.evaluate(() => window.localStorage.getItem("devpath:sidebarWidth"));
     expect(stored).toBe("540");
   });
@@ -111,11 +110,11 @@ test.describe("Desktop: resizable sidebar", () => {
     await page.goto("/");
 
     const aside = page.locator(DESKTOP_ASIDE);
-    await expect.poll(async () => (await aside.boundingBox())?.width).toBe(600);
+    await expect(aside).toHaveCSS("width", "600px");
 
     await page.locator(RESIZE_HANDLE).dblclick();
 
-    await expect.poll(async () => (await aside.boundingBox())?.width).toBe(440);
+    await expect(aside).toHaveCSS("width", "440px");
     const stored = await page.evaluate(() => window.localStorage.getItem("devpath:sidebarWidth"));
     expect(stored).toBe("440");
   });
@@ -135,7 +134,7 @@ test.describe("Desktop: resizable sidebar", () => {
     await page.keyboard.press("ArrowLeft");
 
     const aside = page.locator(DESKTOP_ASIDE);
-    await expect.poll(async () => (await aside.boundingBox())?.width).toBe(464);
+    await expect(aside).toHaveCSS("width", "464px");
     await expect(handle).toHaveAttribute("aria-valuenow", "464");
   });
 });
