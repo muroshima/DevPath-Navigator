@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import ChatPanel from "@/components/ChatPanel";
 import ClusterMap from "@/components/ClusterMap";
@@ -29,6 +29,13 @@ interface LogEntry {
 const STORAGE_KEY = "devpath:chat:v1";
 
 interface PersistedChatState {
+  // userId is part of the lookup key the agent uses to resume a session
+  // (`get_session(user_id, session_id)` in agent/server.py). If we restore
+  // session_id but mint a fresh user_id on every remount, the server
+  // silently starts a new session and the restored history detaches from
+  // future turns — the UI shows old turns but follow-ups don't continue.
+  // So userId is persisted as part of the same snapshot.
+  userId: string;
   messages: ChatMessage[];
   logEntries: LogEntry[];
   sessionId: string | null;
@@ -121,7 +128,12 @@ export default function Page() {
     }
   }, [mobileSidebarOpen]);
 
-  const userId = useMemo(() => `web-${Math.random().toString(36).slice(2, 10)}`, []);
+  // userId is `useState` (not `useMemo`) so the restore effect below can
+  // swap it for the persisted id when one is available. The lazy
+  // initialiser still gives us a stable random id for fresh tabs.
+  const [userId, setUserId] = useState<string>(
+    () => `web-${Math.random().toString(36).slice(2, 10)}`,
+  );
 
   useEffect(() => {
     fetchMap()
@@ -148,6 +160,7 @@ export default function Page() {
       // corrupted entry — ignore, leave defaults in place
     }
     if (!saved || typeof saved !== "object") return;
+    if (typeof saved.userId === "string" && saved.userId) setUserId(saved.userId);
     if (Array.isArray(saved.messages)) setMessages(saved.messages);
     if (Array.isArray(saved.logEntries)) setLogEntries(saved.logEntries);
     if (saved.sessionId === null || typeof saved.sessionId === "string") {
@@ -163,10 +176,38 @@ export default function Page() {
   // Persist whenever any restored field changes. `busy` and map fixtures
   // are deliberately excluded — `busy` is transient and map data refetches
   // on mount, so neither belongs in the saved snapshot.
+  //
+  // Skip the very first run so it can't race the restore effect: on mount
+  // both effects fire after Render 1 (state = defaults). Without the skip,
+  // we'd briefly overwrite the saved snapshot with defaults before the
+  // restore-triggered Render 2 wrote it back. With the skip, the first
+  // write only happens on Render 2 — when state reflects the restored
+  // values (or the user's first action on a fresh tab).
+  const persistSkippedFirstRef = useRef(false);
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (!persistSkippedFirstRef.current) {
+      persistSkippedFirstRef.current = true;
+      return;
+    }
     try {
+      const isEmpty =
+        messages.length === 0 &&
+        logEntries.length === 0 &&
+        sessionId === null &&
+        userPoint === null &&
+        highlightEmployees.length === 0 &&
+        recommendedPaths.length === 0;
+      if (isEmpty) {
+        // Fully cleared state (e.g. after リセット) — remove the key
+        // entirely instead of writing an empty snapshot back. Avoids
+        // leaving stale-looking data in storage and means a future page
+        // load with this empty key short-circuits the restore branch.
+        window.sessionStorage.removeItem(STORAGE_KEY);
+        return;
+      }
       const snapshot: PersistedChatState = {
+        userId,
         messages,
         logEntries,
         sessionId,
@@ -179,20 +220,19 @@ export default function Page() {
       // Quota exceeded / disabled storage — silently drop the write; the
       // app still works in-memory for the current navigation.
     }
-  }, [messages, logEntries, sessionId, userPoint, highlightEmployees, recommendedPaths]);
+  }, [userId, messages, logEntries, sessionId, userPoint, highlightEmployees, recommendedPaths]);
 
   function resetConversation() {
+    // Mint a fresh user id so the agent treats the next message as a new
+    // session, not as a continuation of the just-cleared one. The persist
+    // effect detects the fully-empty state and removes the storage key.
+    setUserId(`web-${Math.random().toString(36).slice(2, 10)}`);
     setMessages([]);
     setLogEntries([]);
     setSessionId(null);
     setUserPoint(null);
     setHighlightEmployees([]);
     setRecommendedPaths([]);
-    try {
-      window.sessionStorage.removeItem(STORAGE_KEY);
-    } catch {
-      // ignore
-    }
   }
 
   function applyToolResults(calls: ToolCall[], results: ToolResult[]) {

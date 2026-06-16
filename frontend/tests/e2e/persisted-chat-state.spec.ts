@@ -152,13 +152,13 @@ test("リセット clears messages, tool log, and sessionStorage snapshot", asyn
   await page.getByRole("button", { name: "リセット" }).click();
 
   // After reset: header (and its リセット button) disappears because
-  // messages.length === 0, tool-log entries are gone, and the
-  // sessionStorage snapshot reflects the empty state.
+  // messages.length === 0, tool-log entries are gone, and the persist
+  // effect removes the sessionStorage key entirely. Poll because the
+  // effect runs after the next render and `getItem` returns null once
+  // the key has been removed.
   await expect(page.getByRole("button", { name: "リセット" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /^normalize_profile/ })).toHaveCount(0);
-
-  const snapshotAfter = await page.evaluate(() =>
-    window.sessionStorage.getItem("devpath:chat:v1"),
-  );
-  expect(snapshotAfter).not.toContain("GenAI Engineer");
+  await expect
+    .poll(() => page.evaluate(() => window.sessionStorage.getItem("devpath:chat:v1")))
+    .toBeNull();
 });
