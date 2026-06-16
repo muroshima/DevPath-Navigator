@@ -24,6 +24,19 @@ interface LogEntry {
   result?: ToolResult;
 }
 
+// sessionStorage key for the chat / tool-log / map-anchor state. Versioned
+// so a future shape change can ignore old payloads instead of crashing.
+const STORAGE_KEY = "devpath:chat:v1";
+
+interface PersistedChatState {
+  messages: ChatMessage[];
+  logEntries: LogEntry[];
+  sessionId: string | null;
+  userPoint: UserPoint | null;
+  highlightEmployees: string[];
+  recommendedPaths: RecommendedPath[];
+}
+
 interface UserPoint {
   x: number;
   y: number;
@@ -115,6 +128,72 @@ export default function Page() {
       .then(setMapData)
       .catch((e) => setMapError(String(e)));
   }, []);
+
+  // Restore chat / tool-log / map-anchor state from sessionStorage on mount
+  // so navigating to /dashboard and back via `← マップに戻る` doesn't wipe
+  // the conversation. sessionStorage (not localStorage) keeps it per-tab
+  // which matches the demo flow — a fresh tab starts fresh.
+  //
+  // Run once per actual mount; under React Strict Mode dev the effect
+  // double-fires, but the second pass just re-reads the same JSON and
+  // re-applies the same setState (React bails on identical values).
+  // Corrupt JSON or shape mismatches fall back to the default empty state.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let saved: PersistedChatState | null = null;
+    try {
+      const raw = window.sessionStorage.getItem(STORAGE_KEY);
+      if (raw) saved = JSON.parse(raw) as PersistedChatState;
+    } catch {
+      // corrupted entry — ignore, leave defaults in place
+    }
+    if (!saved || typeof saved !== "object") return;
+    if (Array.isArray(saved.messages)) setMessages(saved.messages);
+    if (Array.isArray(saved.logEntries)) setLogEntries(saved.logEntries);
+    if (saved.sessionId === null || typeof saved.sessionId === "string") {
+      setSessionId(saved.sessionId);
+    }
+    if (saved.userPoint === null || (typeof saved.userPoint === "object" && saved.userPoint)) {
+      setUserPoint(saved.userPoint);
+    }
+    if (Array.isArray(saved.highlightEmployees)) setHighlightEmployees(saved.highlightEmployees);
+    if (Array.isArray(saved.recommendedPaths)) setRecommendedPaths(saved.recommendedPaths);
+  }, []);
+
+  // Persist whenever any restored field changes. `busy` and map fixtures
+  // are deliberately excluded — `busy` is transient and map data refetches
+  // on mount, so neither belongs in the saved snapshot.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const snapshot: PersistedChatState = {
+        messages,
+        logEntries,
+        sessionId,
+        userPoint,
+        highlightEmployees,
+        recommendedPaths,
+      };
+      window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+    } catch {
+      // Quota exceeded / disabled storage — silently drop the write; the
+      // app still works in-memory for the current navigation.
+    }
+  }, [messages, logEntries, sessionId, userPoint, highlightEmployees, recommendedPaths]);
+
+  function resetConversation() {
+    setMessages([]);
+    setLogEntries([]);
+    setSessionId(null);
+    setUserPoint(null);
+    setHighlightEmployees([]);
+    setRecommendedPaths([]);
+    try {
+      window.sessionStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+  }
 
   function applyToolResults(calls: ToolCall[], results: ToolResult[]) {
     setLogEntries((prev) => {
@@ -238,6 +317,20 @@ export default function Page() {
         />
       </div>
       <div className="flex flex-1 flex-col overflow-hidden">
+        {messages.length > 0 && (
+          <div className="flex items-center justify-between border-b border-slate-700 bg-slate-900/40 px-3 py-1 text-xs text-slate-400">
+            <span>会話履歴</span>
+            <button
+              type="button"
+              onClick={resetConversation}
+              disabled={busy}
+              className="rounded px-2 py-0.5 text-emerald-300 hover:bg-slate-800 disabled:opacity-50"
+              title="会話・推論ログ・マップ上の現在地と推薦をすべて初期化します"
+            >
+              リセット
+            </button>
+          </div>
+        )}
         <div className="flex-1 overflow-hidden border-b border-slate-700">
           <ChatPanel messages={messages} onSend={send} busy={busy} />
         </div>
