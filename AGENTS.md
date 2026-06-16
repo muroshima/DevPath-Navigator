@@ -82,7 +82,7 @@ npm --prefix frontend run build
 npm --prefix frontend run test:e2e
 ```
 
-CI (`.github/workflows/ci.yml`) gates merges on: ruff, pytest, frontend build, Playwright e2e, secret scan.
+CI (`.github/workflows/ci.yml`) runs on every push and PR: ruff, pytest, frontend build, Playwright e2e, secret scan. Branch protection is not enforced yet (the repo is still private for the hackathon — see [CONTRIBUTING.md](./CONTRIBUTING.md) §7), so treat green CI as a social rule: don't merge with red checks.
 
 ## Conventions
 
