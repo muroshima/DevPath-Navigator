@@ -51,11 +51,32 @@ function validateUserPoint(v: unknown): UserPoint | null {
 
 function validateLogEntries(v: unknown): LogEntry[] {
   if (!Array.isArray(v)) return [];
-  return v.filter((entry): entry is LogEntry =>
-    isRecord(entry) &&
-    typeof entry.id === "string" &&
-    isRecord(entry.call) &&
-    typeof entry.call.name === "string"
+  return v.filter((entry): entry is LogEntry => {
+    if (!isRecord(entry)) return false;
+    if (typeof entry.id !== "string") return false;
+    if (!isRecord(entry.call) || typeof entry.call.name !== "string") return false;
+    // entry.result is optional, but if present its `response` must be a
+    // plain object — ToolLog runs `summarizeResponse(response)` which uses
+    // the `in` operator and would throw on null/array/primitive payloads.
+    if (entry.result !== undefined) {
+      if (!isRecord(entry.result)) return false;
+      if (typeof entry.result.name !== "string") return false;
+      if (entry.result.response !== undefined && !isRecord(entry.result.response)) return false;
+    }
+    return true;
+  });
+}
+
+function validateMessages(v: unknown): ChatMessage[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((m): m is ChatMessage =>
+    isRecord(m) &&
+    typeof m.id === "string" &&
+    (m.role === "user" || m.role === "agent") &&
+    typeof m.text === "string" &&
+    // toolCalls / toolResults are optional, but when present must be arrays
+    (m.toolCalls === undefined || Array.isArray(m.toolCalls)) &&
+    (m.toolResults === undefined || Array.isArray(m.toolResults))
   );
 }
 
@@ -206,7 +227,7 @@ export default function Page() {
     }
     if (!saved || typeof saved !== "object") return;
     if (typeof saved.userId === "string" && saved.userId) setUserId(saved.userId);
-    if (Array.isArray(saved.messages)) setMessages(saved.messages);
+    setMessages(validateMessages(saved.messages));
     setLogEntries(validateLogEntries(saved.logEntries));
     if (saved.sessionId === null || typeof saved.sessionId === "string") {
       setSessionId(saved.sessionId);
