@@ -82,7 +82,7 @@ npm --prefix frontend run build
 npm --prefix frontend run test:e2e
 ```
 
-CI (`.github/workflows/ci.yml`) runs on every PR and on pushes to `main` — not on arbitrary branch pushes. The jobs are: ruff, pytest, frontend build, Playwright e2e, secret scan. Branch protection is not enforced yet (the repo is still private for the hackathon — see [CONTRIBUTING.md](./CONTRIBUTING.md) §7), so treat green CI as a social rule: don't merge with red checks.
+CI (`.github/workflows/ci.yml`) runs on every PR and on pushes to `main` — not on arbitrary branch pushes. Four jobs at time of writing: **Lint & test (Python)** (ruff + pytest as steps), **Build (frontend)**, **E2E (Playwright)**, and **Secret scan**. The workflow file is the source of truth — if these get out of sync, trust `.github/workflows/ci.yml`. Branch protection is not enforced yet (the repo is still private for the hackathon — see [CONTRIBUTING.md](./CONTRIBUTING.md) §7), so treat green CI as a social rule: don't merge with red checks.
 
 ## Conventions
 
