@@ -33,6 +33,7 @@ if os.environ.get("K_SERVICE"):
         os.environ["AGENT_ALLOWED_ORIGINS"] = "http://test-placeholder"
 
 from agent.server import (  # noqa: E402
+    ChatRequest,
     _consume_runner_events,
     _parse_positive_int_env,
     resolve_cors_config,
@@ -295,3 +296,66 @@ def test_consume_runner_events_skips_thinking_parts_in_final():
     assert hit is None
     assert text == "Visible reply"
     assert "HIDDEN" not in text
+
+
+# -- M1: ChatRequest log-injection guard ---------------------------------------
+
+
+def test_chat_request_accepts_url_safe_user_id():
+    """Realistic ids — random UUIDs / app-generated identifiers / our own
+    `web-<random>` shape — must all pass."""
+    for uid in ["web-abc123", "alice_42", "550e8400e29b41d4a716446655440000", "A-Z_0-9"]:
+        req = ChatRequest(user_id=uid, message="hi")
+        assert req.user_id == uid
+
+
+def test_chat_request_rejects_newline_in_user_id():
+    """The motivating bug: `user_id="alice\\nFATAL: fake"` would forge a
+    log line in `logger.exception("[chat] ..., user=%s, ...", user_id)`.
+    Pydantic must reject it at the validation boundary."""
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        ChatRequest(user_id="alice\nFATAL: fake", message="hi")
+
+
+def test_chat_request_rejects_carriage_return_in_user_id():
+    """Some log forging exploits use `\\r` to overwrite the current line."""
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        ChatRequest(user_id="alice\rinjected", message="hi")
+
+
+def test_chat_request_rejects_whitespace_in_user_id():
+    """Bare spaces are also outside the URL-safe id charset."""
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        ChatRequest(user_id="alice bob", message="hi")
+
+
+def test_chat_request_rejects_control_characters_in_user_id():
+    """Null bytes and other control characters must be rejected for the
+    same reason — they confuse log parsers and downstream consumers."""
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        ChatRequest(user_id="alice\x00admin", message="hi")
+
+
+def test_chat_request_rejects_newline_in_session_id():
+    """`session_id` also flows into log lines and is also client-supplied —
+    the same constraint applies."""
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        ChatRequest(
+            user_id="alice", session_id="sess\nFATAL: fake", message="hi"
+        )
+
+
+def test_chat_request_accepts_message_with_whitespace_and_newlines():
+    """`message` is natural language — it CAN contain newlines, punctuation,
+    and arbitrary unicode. Only the id fields are charset-restricted."""
+    req = ChatRequest(
+        user_id="alice",
+        message="line 1\nline 2 with 'quotes' and 🤖 emoji",
+    )
+    assert "\n" in req.message
+    assert "🤖" in req.message
