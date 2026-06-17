@@ -42,8 +42,28 @@ FORBIDDEN_SUBSTRINGS = (
     "__table__",          # BigQuery query history shortcut
     "@@",                 # session vars
     "$(",                 # parameter expansion
+    # External / federated / inline-ML escape hatches. These appear as
+    # function-style identifiers (e.g. `FROM EXTERNAL_QUERY(...)`) which
+    # the table-reference allowlist below can't see — the FROM/JOIN
+    # identifier pattern breaks at `(`, so the function call is silently
+    # treated as "no tables referenced". Block by substring so they
+    # never reach BigQuery regardless of where in the statement they sit.
+    "external_query",
+    "ml.generate_text",
+    "ml.predict",
+    "ml.transcribe",
+    "ml.translate",
+    "object_table",       # BQ object tables read from GCS
+    "session_user",       # BQ built-in returns the caller's email
+    "region-",            # `region-<id>.INFORMATION_SCHEMA.*` regional shortcut
 )
 MAX_DEFAULT_LIMIT = 50
+# Hard ceiling on the LIMIT literal the validator will allow. The model's
+# instruction tells it to use LIMIT 50, but a prompt-injected variant
+# emitting `LIMIT 1000000` would still pass the previous "is LIMIT present?"
+# check. With MAX_BYTES_BILLED=100MB the corpus fits, so volume-based
+# exfiltration is bounded only by the row count — cap it here.
+MAX_HARD_LIMIT = 200
 MAX_SQL_LENGTH = 2000  # characters
 MAX_QUESTION_LENGTH = 1000  # characters of NL input the agent can hand off
 
@@ -81,33 +101,80 @@ def _strip_comments(sql: str) -> str:
     return sql
 
 
-def _extract_tables(sql_lower: str) -> set[str]:
-    """Return the set of *dotted* table identifiers referenced after FROM/JOIN.
+def _validate_table_refs(sql_lower: str, project: str, dataset: str) -> str | None:
+    """Validate every FROM/JOIN reference against the full
+    `project.dataset.table` triple, not just the final segment.
 
-    Handles both backticked (`proj-name.dataset.table`) and bare
-    (dataset.table) forms; the project segment may contain hyphens. We only
-    keep the final segment for the allow-list check.
+    The previous version kept only the last dotted segment and matched it
+    against ALLOWED_TABLES. That let a crafted `FROM
+    \\`evil-proj.evil_ds.trajectories\\`` slip past — the suffix matched
+    the allowlist but the dataset/project did not, so any other project
+    where the agent service account had reader (or any future
+    other-dataset reader grant) became reachable. We now require the
+    fully-qualified triple to match exactly.
 
-    Bare single-identifier FROM/JOIN targets (no dots) are CTE aliases or
-    hallucinated table names that BigQuery will refuse to resolve at
-    execution time anyway — the agent's BQ client has no default_dataset
-    set, so unqualified identifiers cannot reach an arbitrary table.
-    Skipping them here lets CTE-using queries pass validation.
+    Two-segment refs (`dataset.table`, with no project) are also rejected
+    — the production prompt instructs the model to emit fully-qualified
+    refs and the BQ client has no default dataset configured.
+
+    Single-identifier refs (no dots) are CTE aliases / hallucinations;
+    BigQuery refuses them at execution time, so we skip them here to
+    keep `WITH cte AS (...) SELECT * FROM cte` working.
     """
+    proj_l = project.lower()
+    ds_l = dataset.lower()
+    allowed_triples = {f"{proj_l}.{ds_l}.{t}" for t in ALLOWED_TABLES}
     pattern = r"(?:from|join)\s+(?:`([^`]+)`|([a-zA-Z0-9_.\-]+))"
-    tables: set[str] = set()
     for m in re.finditer(pattern, sql_lower):
-        ref = (m.group(1) or m.group(2) or "").replace("`", "").strip()
-        if not ref or "." not in ref:
+        ref = (m.group(1) or m.group(2) or "").replace("`", "").strip().lower()
+        if not ref:
             continue
-        last = ref.split(".")[-1]
-        if last:
-            tables.add(last)
-    return tables
+        parts = ref.split(".")
+        if len(parts) == 1:
+            continue  # CTE alias / unqualified — BQ rejects at execution
+        if len(parts) != 3:
+            return (
+                f"Table refs must be fully qualified `project.dataset.table`, "
+                f"got: {ref}"
+            )
+        if ref not in allowed_triples:
+            return (
+                f"Disallowed tables: [{ref!r}]; "
+                f"allowed: {sorted(allowed_triples)}"
+            )
+    return None
 
 
-def _validate_sql(sql: str) -> str | None:
-    """Return None if safe, otherwise an error string."""
+def _validate_limit(sql_lower_no_strings: str) -> str | None:
+    """Require a LIMIT clause whose numeric literal is within MAX_HARD_LIMIT.
+
+    Previously only the *presence* of `LIMIT` was checked. A model coerced
+    into emitting `LIMIT 1000000` would happily return the entire
+    `trajectories` table — the corpus fits under `maximum_bytes_billed`, so
+    bytes-based caps don't bound row count.
+    """
+    m = re.search(r"\blimit\s+(\d+)\b", sql_lower_no_strings)
+    if not m:
+        return "SQL must include LIMIT"
+    n = int(m.group(1))
+    if n > MAX_HARD_LIMIT:
+        return f"LIMIT {n} exceeds hard cap of {MAX_HARD_LIMIT}"
+    return None
+
+
+def _validate_sql(
+    sql: str,
+    *,
+    project: str | None = None,
+    dataset: str | None = None,
+) -> str | None:
+    """Return None if safe, otherwise an error string.
+
+    `project`/`dataset` default to the running agent's BigQuery target
+    (`get_state()`); they are kwargs purely for testability — unit tests
+    pass explicit fixture values so they don't depend on a configured
+    runtime state.
+    """
     if len(sql) > MAX_SQL_LENGTH:
         return f"SQL exceeds {MAX_SQL_LENGTH}-character cap ({len(sql)} chars)"
     # Strip comments BEFORE every check so a model can't hide forbidden
@@ -124,17 +191,22 @@ def _validate_sql(sql: str) -> str | None:
     for kw in FORBIDDEN_KEYWORDS:
         if re.search(rf"\b{kw}\b", low):
             return f"Forbidden keyword: {kw}"
-    referenced = _extract_tables(low)
-    bad = [t for t in referenced if t not in ALLOWED_TABLES]
-    if bad:
-        return f"Disallowed tables: {sorted(bad)}; allowed: {sorted(ALLOWED_TABLES)}"
+
+    if project is None or dataset is None:
+        state = get_state()
+        if project is None:
+            project = state.project
+        if dataset is None:
+            dataset = state.dataset
+    err = _validate_table_refs(low, project, dataset)
+    if err:
+        return err
+
     # `limit` must appear as its own SQL keyword, not inside a string literal
     # or a column name like `time_limit`. Quick proxy: search the
     # string-literal-stripped form.
     no_strings = re.sub(r"'[^']*'", "''", low)
-    if not re.search(r"\blimit\b", no_strings):
-        return "SQL must include LIMIT"
-    return None
+    return _validate_limit(no_strings)
 
 
 def _build_nl2sql_prompt(question: str) -> str:

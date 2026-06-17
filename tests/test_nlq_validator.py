@@ -10,19 +10,31 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from agent.tools.nlq_over_corpus import (
+    MAX_HARD_LIMIT,
     MAX_SQL_LENGTH,
     _strip_comments,
     _validate_sql,
 )
 
+# Tests pass an explicit (project, dataset) so they don't depend on
+# `agent.state.get_state()` being initialized at import time.
+_TEST_PROJECT = "proj"
+_TEST_DATASET = "devpath"
 
-def _ok(sql: str) -> None:
-    err = _validate_sql(sql)
+
+def _ok(sql: str, *, project: str = _TEST_PROJECT, dataset: str = _TEST_DATASET) -> None:
+    err = _validate_sql(sql, project=project, dataset=dataset)
     assert err is None, f"expected pass, got: {err}"
 
 
-def _reject(sql: str, hint: str) -> None:
-    err = _validate_sql(sql)
+def _reject(
+    sql: str,
+    hint: str,
+    *,
+    project: str = _TEST_PROJECT,
+    dataset: str = _TEST_DATASET,
+) -> None:
+    err = _validate_sql(sql, project=project, dataset=dataset)
     assert err is not None, "expected rejection, got pass"
     assert hint.lower() in err.lower(), f"expected '{hint}' in '{err}'"
 
@@ -152,3 +164,99 @@ def test_table_extractor_ignores_cte_alias():
         SELECT * FROM ranked LIMIT 5
         """
     )
+
+
+# -- Security regression tests (S1-S3, issue #53) ------------------------------
+
+
+def test_cross_project_from_rejected_even_when_suffix_matches():
+    """S1: a fully-qualified ref whose last segment is in ALLOWED_TABLES but
+    whose project/dataset don't match the agent's BQ target must be rejected.
+    The previous _extract_tables only kept the suffix, so this passed."""
+    _reject(
+        "SELECT * FROM `evil-proj.evil_ds.trajectories` LIMIT 5",
+        "disallowed tables",
+    )
+
+
+def test_cross_dataset_in_same_project_rejected():
+    """S1: same project, different dataset, allowed suffix — still rejected."""
+    _reject(
+        "SELECT * FROM `proj.shadow_ds.clusters` LIMIT 5",
+        "disallowed tables",
+    )
+
+
+def test_two_segment_dataset_table_ref_rejected():
+    """S1: `dataset.table` (no project) used to pass via the suffix-only
+    check. Production prompt mandates fully-qualified refs."""
+    _reject(
+        "SELECT * FROM devpath.trajectories LIMIT 5",
+        "fully qualified",
+    )
+
+
+def test_external_query_function_rejected():
+    """S2: EXTERNAL_QUERY is a function call, not an identifier; the
+    FROM/JOIN regex breaks at `(` and the extractor sees no tables.
+    Block by substring instead."""
+    _reject(
+        "SELECT * FROM EXTERNAL_QUERY('conn_id', 'SELECT 1 AS x') LIMIT 5",
+        "external_query",
+    )
+
+
+def test_ml_generate_text_rejected():
+    """S2: inline Gemini-from-BQ would let an attacker burn Gemini quota
+    via the BQ job side-channel."""
+    _reject(
+        "SELECT * FROM ML.GENERATE_TEXT(MODEL `proj.devpath.m`, "
+        "(SELECT 'x' AS prompt)) LIMIT 5",
+        "ml.generate_text",
+    )
+
+
+def test_ml_predict_rejected():
+    """S2: ML.PREDICT against an attacker-influenced model could leak."""
+    _reject(
+        "SELECT * FROM ML.PREDICT(MODEL `proj.devpath.m`, "
+        "TABLE `proj.devpath.trajectories`) LIMIT 5",
+        "ml.predict",
+    )
+
+
+def test_object_table_rejected():
+    """S2: BigQuery object tables expose GCS contents to a SELECT.
+    Substring is caught even when smuggled into an identifier name."""
+    _reject(
+        "SELECT * FROM `proj.devpath.product_object_table` LIMIT 5",
+        "object_table",
+    )
+
+
+def test_limit_above_hard_cap_rejected():
+    """S3: previously only the *presence* of LIMIT was checked; a huge
+    numeric literal slipped through and let a single query exfiltrate
+    the entire trajectories table."""
+    _reject(
+        "SELECT * FROM `proj.devpath.trajectories` LIMIT 1000000",
+        "exceeds hard cap",
+    )
+
+
+def test_limit_at_hard_cap_boundary_passes():
+    """S3: LIMIT == MAX_HARD_LIMIT is allowed (inclusive boundary)."""
+    _ok(f"SELECT * FROM `proj.devpath.trajectories` LIMIT {MAX_HARD_LIMIT}")
+
+
+def test_limit_one_above_cap_rejected():
+    """S3: LIMIT == MAX_HARD_LIMIT + 1 is rejected (boundary check)."""
+    _reject(
+        f"SELECT * FROM `proj.devpath.trajectories` LIMIT {MAX_HARD_LIMIT + 1}",
+        "exceeds hard cap",
+    )
+
+
+def test_full_triple_with_default_limit_passes():
+    """S1 happy path: fully-qualified ref + LIMIT 50 passes."""
+    _ok("SELECT employee_id FROM `proj.devpath.trajectories` LIMIT 50")
