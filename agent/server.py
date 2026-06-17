@@ -24,6 +24,7 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import AsyncIterable
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -70,19 +71,59 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="DevPath Navigator", lifespan=lifespan)
 
-# CORS — production traffic flows through the Next.js frontend (which
-# proxies via /api/*), so the browser only sees one origin. Direct calls
-# from a browser to this service are blocked unless the origin is in
-# AGENT_ALLOWED_ORIGINS (comma-separated). For local dev that env var is
-# empty, which keeps the previous wildcard behavior so curl + localhost
-# clients still work.
-_allow_origins_raw = os.environ.get("AGENT_ALLOWED_ORIGINS", "").strip()
-if _allow_origins_raw:
-    _allow_origins = [o.strip() for o in _allow_origins_raw.split(",") if o.strip()]
-    _allow_credentials = True
-else:
-    _allow_origins = ["*"]
-    _allow_credentials = False  # CORS forbids credentials with wildcard
+def resolve_cors_config(env: dict[str, str] | None = None) -> tuple[list[str], bool]:
+    """Resolve CORS origins + credentials flag from environment.
+
+    Production traffic flows through the Next.js frontend (which proxies
+    via /api/*), so the browser only sees one origin. Direct calls from a
+    browser to this service are blocked unless the origin is in
+    AGENT_ALLOWED_ORIGINS (comma-separated).
+
+    On Cloud Run (K_SERVICE is set) we refuse to return wildcard CORS:
+    the service is public and unauthenticated, so `*` would let any web
+    page issue cross-origin POSTs to /chat from a visitor's browser,
+    burning Gemini quota and BQ cost on the project's bill. Fail-closed
+    beats serving `*` to a public URL.
+
+    Misconfiguration guards:
+      * `AGENT_ALLOWED_ORIGINS="*"` (or any list containing `"*"`) is
+        rejected outright — wildcard with `allow_credentials=True`
+        violates the CORS spec, and silently downgrading to
+        `allow_credentials=False` would be a confusing trap. Operators
+        who want wildcard must simply omit the env var.
+      * `AGENT_ALLOWED_ORIGINS=","` (or any value that strips to an
+        empty list) is treated as "unset" so the K_SERVICE gate applies
+        — without this, the operator gets `allow_credentials=True`
+        with zero origins, which is both useless and inconsistent.
+
+    Pulled into a function (rather than module-load-time toplevel code)
+    so tests can drive it without reloading the module.
+    """
+    e = os.environ if env is None else env
+    raw = e.get("AGENT_ALLOWED_ORIGINS", "").strip()
+    if raw:
+        origins = [o.strip() for o in raw.split(",") if o.strip()]
+        if "*" in origins:
+            raise RuntimeError(
+                "AGENT_ALLOWED_ORIGINS contains '*'; wildcard CORS with "
+                "allow_credentials=True is forbidden by the CORS spec. "
+                "Omit AGENT_ALLOWED_ORIGINS entirely for local-dev "
+                "wildcard, or list explicit origins."
+            )
+        if origins:
+            return origins, True
+        # Empty after parsing (e.g. ",,,") — fall through to the unset path.
+    if e.get("K_SERVICE"):
+        raise RuntimeError(
+            "AGENT_ALLOWED_ORIGINS must be set when running on Cloud Run "
+            "(K_SERVICE is set). Refusing to start with wildcard CORS on a "
+            "public unauthenticated endpoint."
+        )
+    # CORS forbids credentials with wildcard, so allow_credentials=False.
+    return ["*"], False
+
+
+_allow_origins, _allow_credentials = resolve_cors_config()
 
 app.add_middleware(
     CORSMiddleware,
@@ -112,6 +153,53 @@ require_read_quota = rate_limit_dependency(read_limiter)
 MAX_USER_ID_LENGTH = 128
 MAX_SESSION_ID_LENGTH = 128
 MAX_MESSAGE_LENGTH = 4000
+
+def _parse_positive_int_env(name: str, default: int) -> int:
+    """Parse a positive-integer env var with a clear failure message.
+
+    The bare `int(os.environ.get(...))` form crashes with an opaque
+    `ValueError` traceback if the operator typo'd the value (e.g.
+    `AGENT_MAX_EVENTS=` or `AGENT_MAX_EVENTS=24a`). Cloud Run logs the
+    traceback but the meaningful info is buried. Raise a clear
+    RuntimeError instead so the deploy-time failure points at the
+    actual misconfiguration.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    # Strip surrounding whitespace before both the empty check and the
+    # parse — env values often pick up trailing whitespace via copy/paste
+    # (`AGENT_MAX_EVENTS="24 "`). Python's `int()` already accepts
+    # surrounding whitespace, but stripping explicitly keeps the error
+    # message clean (no stray spaces in the `got '24 '` repr).
+    raw = raw.strip()
+    if raw == "":
+        return default
+    try:
+        n = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"{name} must be a positive integer, got {raw!r}"
+        ) from exc
+    if n <= 0:
+        raise RuntimeError(f"{name} must be > 0, got {n}")
+    return n
+
+
+# Per-/chat fan-out caps. Without these, a single request can stream an
+# unbounded number of Gemini turns + tool calls. We cap two numbers
+# because they bound different surfaces:
+#   * MAX_EVENTS_PER_CHAT  — total ADK events the runner streams. Even
+#                            non-tool events cost wall-clock + tokens.
+#   * MAX_TOOL_CALLS_PER_CHAT — function_call parts Gemini emits. Each
+#                            tool invocation runs at least one BQ job
+#                            (some run a nested Gemini call via
+#                            `nlq_over_corpus`). This is the cost lever.
+# Caps are intentionally generous for a normal answer flow (~3-5 tool
+# calls) but bounded enough that a prompt-injection-driven fan-out
+# can't keep growing cost without limit.
+MAX_EVENTS_PER_CHAT = _parse_positive_int_env("AGENT_MAX_EVENTS", 24)
+MAX_TOOL_CALLS_PER_CHAT = _parse_positive_int_env("AGENT_MAX_TOOL_CALLS", 8)
 
 
 class ChatRequest(BaseModel):
@@ -256,6 +344,65 @@ def eval_history(limit: int = 50) -> EvalHistoryResponse:
     return EvalHistoryResponse(runs=[EvalRunSummary(**r) for r in rows])
 
 
+async def _consume_runner_events(
+    events: AsyncIterable[Any],
+    *,
+    max_events: int,
+    max_tool_calls: int,
+) -> tuple[str, list[ToolCall], list[ToolResult], str | None]:
+    """Walk the ADK runner's event stream, applying per-/chat fan-out caps.
+
+    Returns (response_text, tool_calls, tool_results, hit_cap_label).
+    `hit_cap_label` is None on a clean finish, or a short string naming
+    which cap fired ("event cap (N)" / "tool-call cap (M)") so the
+    caller can log and produce a partial response.
+
+    Pulled out of the /chat handler so the cap logic is unit-testable
+    with a synthetic async iterator — it's a security/cost control,
+    a regression would silently disable DoS protection.
+    """
+    response_text = ""
+    tool_calls: list[ToolCall] = []
+    tool_results: list[ToolResult] = []
+    event_count = 0
+    tool_call_count = 0
+    hit_cap: str | None = None
+    async for event in events:
+        event_count += 1
+        if event_count > max_events:
+            hit_cap = f"event cap ({max_events})"
+            break
+        if event.content and event.content.parts:
+            for part in event.content.parts:
+                if part.function_call:
+                    if tool_call_count >= max_tool_calls:
+                        hit_cap = f"tool-call cap ({max_tool_calls})"
+                        break
+                    tool_call_count += 1
+                    tool_calls.append(ToolCall(
+                        name=part.function_call.name,
+                        args=dict(part.function_call.args) if part.function_call.args else None,
+                    ))
+                if part.function_response:
+                    tool_results.append(ToolResult(
+                        name=part.function_response.name,
+                        response=dict(part.function_response.response)
+                        if part.function_response.response else None,
+                    ))
+            if hit_cap:
+                break
+        if event.is_final_response() and event.content and event.content.parts:
+            for part in event.content.parts:
+                # Skip Gemini thinking parts — those are internal reasoning,
+                # not the user-facing reply. (Some SDK versions expose this
+                # as part.thought=True; defensively check for it.)
+                if getattr(part, "thought", False):
+                    continue
+                if part.text:
+                    response_text += part.text
+    return response_text, tool_calls, tool_results, hit_cap
+
+
 @app.post(
     "/chat",
     response_model=ChatResponse,
@@ -279,35 +426,24 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
     content = genai_types.Content(role="user", parts=[genai_types.Part.from_text(text=req.message)])
 
-    response_text = ""
-    tool_calls: list[ToolCall] = []
-    tool_results: list[ToolResult] = []
     try:
-        async for event in runner.run_async(
-            user_id=req.user_id, session_id=session.id, new_message=content
-        ):
-            if event.content and event.content.parts:
-                for part in event.content.parts:
-                    if part.function_call:
-                        tool_calls.append(ToolCall(
-                            name=part.function_call.name,
-                            args=dict(part.function_call.args) if part.function_call.args else None,
-                        ))
-                    if part.function_response:
-                        tool_results.append(ToolResult(
-                            name=part.function_response.name,
-                            response=dict(part.function_response.response)
-                            if part.function_response.response else None,
-                        ))
-            if event.is_final_response() and event.content and event.content.parts:
-                for part in event.content.parts:
-                    # Skip Gemini thinking parts — those are internal reasoning,
-                    # not the user-facing reply. (Some SDK versions expose this
-                    # as part.thought=True; defensively check for it.)
-                    if getattr(part, "thought", False):
-                        continue
-                    if part.text:
-                        response_text += part.text
+        response_text, tool_calls, tool_results, hit_cap = await _consume_runner_events(
+            runner.run_async(
+                user_id=req.user_id, session_id=session.id, new_message=content
+            ),
+            max_events=MAX_EVENTS_PER_CHAT,
+            max_tool_calls=MAX_TOOL_CALLS_PER_CHAT,
+        )
+        if hit_cap:
+            logger.warning(
+                "[chat] %s reached (user=%s session=%s)",
+                hit_cap, req.user_id, session.id,
+            )
+            if not response_text:
+                response_text = (
+                    "Sorry, I had to stop early because this conversation hit a "
+                    "per-request safety cap. Try asking a more specific question."
+                )
     except Exception as exc:
         # Don't leak the raw exception text to the caller — it might include
         # internal table names, SDK stack hints, or other reconnaissance gold.
