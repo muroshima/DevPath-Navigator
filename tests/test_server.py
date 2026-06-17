@@ -20,12 +20,17 @@ if str(REPO_ROOT) not in sys.path:
 
 # `agent.server` runs `resolve_cors_config()` at import time. If the test
 # host happens to have `K_SERVICE` set (Cloud Run-style CI runners do
-# this), the import would raise and the whole module would fail to load
-# even though the tests themselves pass explicit env dicts. Seed a
-# placeholder allowlist via setdefault so the import is hermetic;
-# individual tests still call `resolve_cors_config(env=...)` with their
-# own envs and aren't affected.
-os.environ.setdefault("AGENT_ALLOWED_ORIGINS", "http://test-placeholder")
+# this) AND `AGENT_ALLOWED_ORIGINS` is missing, empty, whitespace-only,
+# or comma-only (i.e. parses to an empty origin list), the import
+# raises and the whole module fails to load.
+#
+# Replicate the production parse so this guard catches the same shapes
+# `resolve_cors_config` treats as "unset". Tests pass explicit env
+# dicts to `resolve_cors_config`, so the placeholder we install here
+# doesn't affect their assertions.
+_raw_origins = os.environ.get("AGENT_ALLOWED_ORIGINS", "")
+if not any(o.strip() for o in _raw_origins.split(",")):
+    os.environ["AGENT_ALLOWED_ORIGINS"] = "http://test-placeholder"
 
 from agent.server import (  # noqa: E402
     _consume_runner_events,
