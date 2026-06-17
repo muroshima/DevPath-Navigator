@@ -260,3 +260,38 @@ def test_limit_one_above_cap_rejected():
 def test_full_triple_with_default_limit_passes():
     """S1 happy path: fully-qualified ref + LIMIT 50 passes."""
     _ok("SELECT employee_id FROM `proj.devpath.trajectories` LIMIT 50")
+
+
+def test_limit_only_in_subquery_rejected():
+    """S3 follow-up (Copilot): LIMIT inside a subquery does not bound the
+    outer query. The validator must require a trailing top-level LIMIT."""
+    _reject(
+        "SELECT * FROM `proj.devpath.trajectories` "
+        "WHERE EXISTS (SELECT 1 FROM `proj.devpath.clusters` LIMIT 1)",
+        "top-level LIMIT",
+    )
+
+
+def test_limit_only_in_cte_rejected():
+    """S3 follow-up: LIMIT inside a CTE body doesn't bound the outer
+    SELECT — `WITH bounded AS (... LIMIT 1) SELECT * FROM bounded`
+    returns one row from `bounded`, but a CTE whose body unions in
+    unbounded sources still leaks at the outer level."""
+    _reject(
+        "WITH bounded AS (SELECT * FROM `proj.devpath.clusters` LIMIT 1) "
+        "SELECT * FROM bounded",
+        "top-level LIMIT",
+    )
+
+
+def test_trailing_limit_with_offset_passes():
+    """Pagination form `LIMIT N OFFSET M` at the tail is accepted."""
+    _ok(
+        "SELECT * FROM `proj.devpath.trajectories` LIMIT 50 OFFSET 100"
+    )
+
+
+def test_trailing_limit_with_semicolon_passes():
+    """An optional trailing `;` is tolerated by the trailing-LIMIT matcher
+    (the single-statement check already rejects mid-statement `;`)."""
+    _ok("SELECT * FROM `proj.devpath.trajectories` LIMIT 50;")

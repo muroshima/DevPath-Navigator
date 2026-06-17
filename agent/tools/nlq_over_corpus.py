@@ -145,17 +145,25 @@ def _validate_table_refs(sql_lower: str, project: str, dataset: str) -> str | No
     return None
 
 
-def _validate_limit(sql_lower_no_strings: str) -> str | None:
-    """Require a LIMIT clause whose numeric literal is within MAX_HARD_LIMIT.
+_TRAILING_LIMIT_RE = re.compile(
+    r"\blimit\s+(\d+)(?:\s+offset\s+\d+)?\s*;?\s*\Z"
+)
 
-    Previously only the *presence* of `LIMIT` was checked. A model coerced
-    into emitting `LIMIT 1000000` would happily return the entire
-    `trajectories` table — the corpus fits under `maximum_bytes_billed`, so
-    bytes-based caps don't bound row count.
+
+def _validate_limit(sql_lower_no_strings: str) -> str | None:
+    """Require a TOP-LEVEL trailing LIMIT clause within MAX_HARD_LIMIT.
+
+    Previously this accepted any `LIMIT <n>` anywhere in the SQL — including
+    inside a subquery or CTE — which let a model emit
+    `... WHERE (SELECT 1 FROM x LIMIT 1) = 1` with no outer LIMIT and return
+    unbounded rows. Anchoring to the statement end forces the LIMIT to
+    apply to the outermost SELECT.
+
+    `LIMIT N OFFSET M` and an optional trailing semicolon are tolerated.
     """
-    m = re.search(r"\blimit\s+(\d+)\b", sql_lower_no_strings)
+    m = _TRAILING_LIMIT_RE.search(sql_lower_no_strings.strip())
     if not m:
-        return "SQL must include LIMIT"
+        return "SQL must end with a top-level LIMIT clause"
     n = int(m.group(1))
     if n > MAX_HARD_LIMIT:
         return f"LIMIT {n} exceeds hard cap of {MAX_HARD_LIMIT}"
