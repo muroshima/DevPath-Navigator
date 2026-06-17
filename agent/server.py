@@ -24,6 +24,7 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import AsyncIterable
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -343,6 +344,65 @@ def eval_history(limit: int = 50) -> EvalHistoryResponse:
     return EvalHistoryResponse(runs=[EvalRunSummary(**r) for r in rows])
 
 
+async def _consume_runner_events(
+    events: AsyncIterable[Any],
+    *,
+    max_events: int,
+    max_tool_calls: int,
+) -> tuple[str, list[ToolCall], list[ToolResult], str | None]:
+    """Walk the ADK runner's event stream, applying per-/chat fan-out caps.
+
+    Returns (response_text, tool_calls, tool_results, hit_cap_label).
+    `hit_cap_label` is None on a clean finish, or a short string naming
+    which cap fired ("event cap (N)" / "tool-call cap (M)") so the
+    caller can log and produce a partial response.
+
+    Pulled out of the /chat handler so the cap logic is unit-testable
+    with a synthetic async iterator — it's a security/cost control,
+    a regression would silently disable DoS protection.
+    """
+    response_text = ""
+    tool_calls: list[ToolCall] = []
+    tool_results: list[ToolResult] = []
+    event_count = 0
+    tool_call_count = 0
+    hit_cap: str | None = None
+    async for event in events:
+        event_count += 1
+        if event_count > max_events:
+            hit_cap = f"event cap ({max_events})"
+            break
+        if event.content and event.content.parts:
+            for part in event.content.parts:
+                if part.function_call:
+                    if tool_call_count >= max_tool_calls:
+                        hit_cap = f"tool-call cap ({max_tool_calls})"
+                        break
+                    tool_call_count += 1
+                    tool_calls.append(ToolCall(
+                        name=part.function_call.name,
+                        args=dict(part.function_call.args) if part.function_call.args else None,
+                    ))
+                if part.function_response:
+                    tool_results.append(ToolResult(
+                        name=part.function_response.name,
+                        response=dict(part.function_response.response)
+                        if part.function_response.response else None,
+                    ))
+            if hit_cap:
+                break
+        if event.is_final_response() and event.content and event.content.parts:
+            for part in event.content.parts:
+                # Skip Gemini thinking parts — those are internal reasoning,
+                # not the user-facing reply. (Some SDK versions expose this
+                # as part.thought=True; defensively check for it.)
+                if getattr(part, "thought", False):
+                    continue
+                if part.text:
+                    response_text += part.text
+    return response_text, tool_calls, tool_results, hit_cap
+
+
 @app.post(
     "/chat",
     response_model=ChatResponse,
@@ -366,52 +426,18 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
     content = genai_types.Content(role="user", parts=[genai_types.Part.from_text(text=req.message)])
 
-    response_text = ""
-    tool_calls: list[ToolCall] = []
-    tool_results: list[ToolResult] = []
-    event_count = 0
-    tool_call_count = 0
-    hit_cap: str | None = None  # set to a label when a fan-out cap is reached
     try:
-        async for event in runner.run_async(
-            user_id=req.user_id, session_id=session.id, new_message=content
-        ):
-            event_count += 1
-            if event_count > MAX_EVENTS_PER_CHAT:
-                hit_cap = f"event cap ({MAX_EVENTS_PER_CHAT})"
-                break
-            if event.content and event.content.parts:
-                for part in event.content.parts:
-                    if part.function_call:
-                        if tool_call_count >= MAX_TOOL_CALLS_PER_CHAT:
-                            hit_cap = f"tool-call cap ({MAX_TOOL_CALLS_PER_CHAT})"
-                            break
-                        tool_call_count += 1
-                        tool_calls.append(ToolCall(
-                            name=part.function_call.name,
-                            args=dict(part.function_call.args) if part.function_call.args else None,
-                        ))
-                    if part.function_response:
-                        tool_results.append(ToolResult(
-                            name=part.function_response.name,
-                            response=dict(part.function_response.response)
-                            if part.function_response.response else None,
-                        ))
-                if hit_cap:
-                    break
-            if event.is_final_response() and event.content and event.content.parts:
-                for part in event.content.parts:
-                    # Skip Gemini thinking parts — those are internal reasoning,
-                    # not the user-facing reply. (Some SDK versions expose this
-                    # as part.thought=True; defensively check for it.)
-                    if getattr(part, "thought", False):
-                        continue
-                    if part.text:
-                        response_text += part.text
+        response_text, tool_calls, tool_results, hit_cap = await _consume_runner_events(
+            runner.run_async(
+                user_id=req.user_id, session_id=session.id, new_message=content
+            ),
+            max_events=MAX_EVENTS_PER_CHAT,
+            max_tool_calls=MAX_TOOL_CALLS_PER_CHAT,
+        )
         if hit_cap:
             logger.warning(
-                "[chat] %s reached (events=%d tool_calls=%d user=%s session=%s)",
-                hit_cap, event_count, tool_call_count, req.user_id, session.id,
+                "[chat] %s reached (user=%s session=%s)",
+                hit_cap, req.user_id, session.id,
             )
             if not response_text:
                 response_text = (

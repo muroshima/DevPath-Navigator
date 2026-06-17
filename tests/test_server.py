@@ -27,7 +27,11 @@ if str(REPO_ROOT) not in sys.path:
 # own envs and aren't affected.
 os.environ.setdefault("AGENT_ALLOWED_ORIGINS", "http://test-placeholder")
 
-from agent.server import _parse_positive_int_env, resolve_cors_config  # noqa: E402
+from agent.server import (  # noqa: E402
+    _consume_runner_events,
+    _parse_positive_int_env,
+    resolve_cors_config,
+)
 
 
 def test_cors_wildcard_locally_when_env_unset():
@@ -160,3 +164,127 @@ def test_parse_positive_int_env_strips_surrounding_whitespace(monkeypatch):
     closed. `AGENT_MAX_EVENTS="24 "` is a clear positive integer."""
     monkeypatch.setenv("FOO_BAR", "  24\n")
     assert _parse_positive_int_env("FOO_BAR", 1) == 24
+
+
+# -- Fan-out cap enforcement (_consume_runner_events) --------------------------
+
+
+class _FakeFunctionCall:
+    def __init__(self, name: str, args: dict | None = None):
+        self.name = name
+        self.args = args or {}
+
+
+class _FakeFunctionResponse:
+    def __init__(self, name: str, response: dict | None = None):
+        self.name = name
+        self.response = response or {}
+
+
+class _FakePart:
+    def __init__(
+        self,
+        function_call: _FakeFunctionCall | None = None,
+        function_response: _FakeFunctionResponse | None = None,
+        text: str | None = None,
+        thought: bool = False,
+    ):
+        self.function_call = function_call
+        self.function_response = function_response
+        self.text = text
+        self.thought = thought
+
+
+class _FakeContent:
+    def __init__(self, parts: list[_FakePart]):
+        self.parts = parts
+
+
+class _FakeEvent:
+    def __init__(self, parts: list[_FakePart], *, final: bool = False):
+        self.content = _FakeContent(parts) if parts else None
+        self._final = final
+
+    def is_final_response(self) -> bool:
+        return self._final
+
+
+async def _stream(events: list[_FakeEvent]):
+    for e in events:
+        yield e
+
+
+def _run(coro):
+    """Run an async coroutine to completion from a sync test."""
+    import asyncio
+    return asyncio.run(coro)
+
+
+def test_consume_runner_events_stops_at_event_cap():
+    """50 events streamed, cap is 3 → loop must break after the 4th
+    iteration (because we increment-then-check)."""
+    events = [_FakeEvent([_FakePart(text="x")], final=False) for _ in range(50)]
+    text, calls, results, hit = _run(
+        _consume_runner_events(_stream(events), max_events=3, max_tool_calls=8)
+    )
+    assert hit == "event cap (3)"
+    # No tool calls, no final text — partial state OK
+    assert calls == []
+    assert results == []
+
+
+def test_consume_runner_events_stops_at_tool_call_cap():
+    """Stream emits 6 function_call parts but cap is 2 — only 2 should
+    be recorded and `hit_cap` flags the tool-call cap."""
+    events = [
+        _FakeEvent([_FakePart(function_call=_FakeFunctionCall(f"t{i}"))])
+        for i in range(6)
+    ]
+    text, calls, results, hit = _run(
+        _consume_runner_events(_stream(events), max_events=24, max_tool_calls=2)
+    )
+    assert hit == "tool-call cap (2)"
+    assert [c.name for c in calls] == ["t0", "t1"]
+
+
+def test_consume_runner_events_collects_normal_response_under_cap():
+    """A normal 3-tool flow + final text should fully complete with
+    hit_cap=None and the final text concatenated."""
+    events = [
+        _FakeEvent([_FakePart(function_call=_FakeFunctionCall("locate_user"))]),
+        _FakeEvent([
+            _FakePart(function_response=_FakeFunctionResponse("locate_user", {"x": 1}))
+        ]),
+        _FakeEvent([_FakePart(function_call=_FakeFunctionCall("explain_cluster"))]),
+        _FakeEvent([
+            _FakePart(function_response=_FakeFunctionResponse("explain_cluster", {"y": 2}))
+        ]),
+        _FakeEvent([_FakePart(text="Final answer.")], final=True),
+    ]
+    text, calls, results, hit = _run(
+        _consume_runner_events(_stream(events), max_events=24, max_tool_calls=8)
+    )
+    assert hit is None
+    assert text == "Final answer."
+    assert [c.name for c in calls] == ["locate_user", "explain_cluster"]
+    assert [r.name for r in results] == ["locate_user", "explain_cluster"]
+
+
+def test_consume_runner_events_skips_thinking_parts_in_final():
+    """Gemini emits `thought=True` parts as internal reasoning — those
+    must not be concatenated into the user-facing response."""
+    events = [
+        _FakeEvent(
+            [
+                _FakePart(text="HIDDEN reasoning", thought=True),
+                _FakePart(text="Visible reply"),
+            ],
+            final=True,
+        ),
+    ]
+    text, _, _, hit = _run(
+        _consume_runner_events(_stream(events), max_events=24, max_tool_calls=8)
+    )
+    assert hit is None
+    assert text == "Visible reply"
+    assert "HIDDEN" not in text
