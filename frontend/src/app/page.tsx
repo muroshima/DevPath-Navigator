@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import ChatPanel from "@/components/ChatPanel";
 import ClusterMap from "@/components/ClusterMap";
@@ -22,6 +22,106 @@ interface LogEntry {
   id: string;
   call: ToolCall;
   result?: ToolResult;
+}
+
+// sessionStorage key for the chat / tool-log / map-anchor state. Versioned
+// so a future shape change can ignore old payloads instead of crashing.
+const STORAGE_KEY = "devpath:chat:v1";
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+// Restore validators. The persisted JSON is untyped at runtime — a corrupt
+// or schema-skewed snapshot must not be allowed to flow into props that
+// expect specific shapes (ClusterMap reads `userPoint.x`/`p.commonNewTech`,
+// ToolLog reads `entry.call.name`). Each validator returns the value if
+// it matches the expected shape, otherwise null/empty so we fall back to
+// defaults instead of crashing the render.
+function validateUserPoint(v: unknown): UserPoint | null {
+  if (!isRecord(v)) return null;
+  if (typeof v.x !== "number" || typeof v.y !== "number") return null;
+  return {
+    x: v.x,
+    y: v.y,
+    clusterId: typeof v.clusterId === "number" ? v.clusterId : null,
+    archetype: typeof v.archetype === "string" ? v.archetype : null,
+  };
+}
+
+function isValidToolCall(v: unknown): v is ToolCall {
+  return isRecord(v) && typeof v.name === "string";
+}
+
+function isValidToolResult(v: unknown): v is ToolResult {
+  // `response` is intentionally `Record | null | undefined`. ToolLog treats
+  // null/undefined as "実行中" and only runs `summarizeResponse()` on
+  // records — so null is a legitimate persisted value, not corruption.
+  return (
+    isRecord(v) &&
+    typeof v.name === "string" &&
+    (v.response === undefined || v.response === null || isRecord(v.response))
+  );
+}
+
+function validateLogEntries(v: unknown): LogEntry[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((entry): entry is LogEntry => {
+    if (!isRecord(entry)) return false;
+    if (typeof entry.id !== "string") return false;
+    if (!isValidToolCall(entry.call)) return false;
+    return entry.result === undefined || isValidToolResult(entry.result);
+  });
+}
+
+function validateMessages(v: unknown): ChatMessage[] {
+  if (!Array.isArray(v)) return [];
+  const out: ChatMessage[] = [];
+  for (const m of v) {
+    if (!isRecord(m)) continue;
+    if (typeof m.id !== "string") continue;
+    if (m.role !== "user" && m.role !== "agent") continue;
+    if (typeof m.text !== "string") continue;
+    // Sanitize toolCalls / toolResults: keep the message, drop invalid
+    // items inside. ChatPanel reads `tc.name` directly, so a `null`
+    // element would crash the render.
+    const toolCalls = Array.isArray(m.toolCalls) ? m.toolCalls.filter(isValidToolCall) : undefined;
+    const toolResults = Array.isArray(m.toolResults)
+      ? m.toolResults.filter(isValidToolResult)
+      : undefined;
+    out.push({ id: m.id, role: m.role, text: m.text, toolCalls, toolResults });
+  }
+  return out;
+}
+
+function validateRecommendedPaths(v: unknown): RecommendedPath[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((p): p is RecommendedPath =>
+    isRecord(p) &&
+    typeof p.role === "string" &&
+    typeof p.x === "number" &&
+    typeof p.y === "number" &&
+    typeof p.supportCount === "number" &&
+    Array.isArray(p.commonNewTech) &&
+    p.commonNewTech.every((t) => typeof t === "string") &&
+    (p.sampleTrajectory === null || typeof p.sampleTrajectory === "string")
+  );
+}
+
+interface PersistedChatState {
+  // userId is part of the lookup key the agent uses to resume a session
+  // (`get_session(user_id, session_id)` in agent/server.py). If we restore
+  // session_id but mint a fresh user_id on every remount, the server
+  // silently starts a new session and the restored history detaches from
+  // future turns — the UI shows old turns but follow-ups don't continue.
+  // So userId is persisted as part of the same snapshot.
+  userId: string;
+  messages: ChatMessage[];
+  logEntries: LogEntry[];
+  sessionId: string | null;
+  userPoint: UserPoint | null;
+  highlightEmployees: string[];
+  recommendedPaths: RecommendedPath[];
 }
 
 interface UserPoint {
@@ -108,13 +208,114 @@ export default function Page() {
     }
   }, [mobileSidebarOpen]);
 
-  const userId = useMemo(() => `web-${Math.random().toString(36).slice(2, 10)}`, []);
+  // userId is `useState` (not `useMemo`) so the restore effect below can
+  // swap it for the persisted id when one is available. The lazy
+  // initialiser still gives us a stable random id for fresh tabs.
+  const [userId, setUserId] = useState<string>(
+    () => `web-${Math.random().toString(36).slice(2, 10)}`,
+  );
 
   useEffect(() => {
     fetchMap()
       .then(setMapData)
       .catch((e) => setMapError(String(e)));
   }, []);
+
+  // Restore chat / tool-log / map-anchor state from sessionStorage on mount
+  // so navigating to /dashboard and back via `← マップに戻る` doesn't wipe
+  // the conversation. sessionStorage (not localStorage) keeps it per-tab
+  // which matches the demo flow — a fresh tab starts fresh.
+  //
+  // Run once per actual mount; under React Strict Mode dev the effect
+  // double-fires, but the second pass just re-reads the same JSON and
+  // re-applies the same setState (React bails on identical values).
+  // Corrupt JSON or shape mismatches fall back to the default empty state.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let saved: PersistedChatState | null = null;
+    try {
+      const raw = window.sessionStorage.getItem(STORAGE_KEY);
+      if (raw) saved = JSON.parse(raw) as PersistedChatState;
+    } catch {
+      // corrupted entry — ignore, leave defaults in place
+    }
+    if (!saved || typeof saved !== "object") return;
+    if (typeof saved.userId === "string" && saved.userId) setUserId(saved.userId);
+    setMessages(validateMessages(saved.messages));
+    setLogEntries(validateLogEntries(saved.logEntries));
+    if (saved.sessionId === null || typeof saved.sessionId === "string") {
+      setSessionId(saved.sessionId);
+    }
+    setUserPoint(validateUserPoint(saved.userPoint));
+    if (Array.isArray(saved.highlightEmployees)) {
+      setHighlightEmployees(
+        saved.highlightEmployees.filter((id): id is string => typeof id === "string"),
+      );
+    }
+    setRecommendedPaths(validateRecommendedPaths(saved.recommendedPaths));
+  }, []);
+
+  // Persist whenever any restored field changes. `busy` and map fixtures
+  // are deliberately excluded — `busy` is transient and map data refetches
+  // on mount, so neither belongs in the saved snapshot.
+  //
+  // Skip the very first run so it can't race the restore effect: on mount
+  // both effects fire after Render 1 (state = defaults). Without the skip,
+  // we'd briefly overwrite the saved snapshot with defaults before the
+  // restore-triggered Render 2 wrote it back. With the skip, the first
+  // write only happens on Render 2 — when state reflects the restored
+  // values (or the user's first action on a fresh tab).
+  const persistSkippedFirstRef = useRef(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!persistSkippedFirstRef.current) {
+      persistSkippedFirstRef.current = true;
+      return;
+    }
+    try {
+      const isEmpty =
+        messages.length === 0 &&
+        logEntries.length === 0 &&
+        sessionId === null &&
+        userPoint === null &&
+        highlightEmployees.length === 0 &&
+        recommendedPaths.length === 0;
+      if (isEmpty) {
+        // Fully cleared state (e.g. after リセット) — remove the key
+        // entirely instead of writing an empty snapshot back. Avoids
+        // leaving stale-looking data in storage and means a future page
+        // load with this empty key short-circuits the restore branch.
+        window.sessionStorage.removeItem(STORAGE_KEY);
+        return;
+      }
+      const snapshot: PersistedChatState = {
+        userId,
+        messages,
+        logEntries,
+        sessionId,
+        userPoint,
+        highlightEmployees,
+        recommendedPaths,
+      };
+      window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+    } catch {
+      // Quota exceeded / disabled storage — silently drop the write; the
+      // app still works in-memory for the current navigation.
+    }
+  }, [userId, messages, logEntries, sessionId, userPoint, highlightEmployees, recommendedPaths]);
+
+  function resetConversation() {
+    // Mint a fresh user id so the agent treats the next message as a new
+    // session, not as a continuation of the just-cleared one. The persist
+    // effect detects the fully-empty state and removes the storage key.
+    setUserId(`web-${Math.random().toString(36).slice(2, 10)}`);
+    setMessages([]);
+    setLogEntries([]);
+    setSessionId(null);
+    setUserPoint(null);
+    setHighlightEmployees([]);
+    setRecommendedPaths([]);
+  }
 
   function applyToolResults(calls: ToolCall[], results: ToolResult[]) {
     setLogEntries((prev) => {
@@ -238,6 +439,20 @@ export default function Page() {
         />
       </div>
       <div className="flex flex-1 flex-col overflow-hidden">
+        {messages.length > 0 && (
+          <div className="flex items-center justify-between border-b border-slate-700 bg-slate-900/40 px-3 py-1 text-xs text-slate-400">
+            <span>会話履歴</span>
+            <button
+              type="button"
+              onClick={resetConversation}
+              disabled={busy}
+              className="rounded px-2 py-0.5 text-emerald-300 hover:bg-slate-800 disabled:opacity-50"
+              title="会話・推論ログ・マップ上の現在地と推薦をすべて初期化します"
+            >
+              リセット
+            </button>
+          </div>
+        )}
         <div className="flex-1 overflow-hidden border-b border-slate-700">
           <ChatPanel messages={messages} onSend={send} busy={busy} />
         </div>
