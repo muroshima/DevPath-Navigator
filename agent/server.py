@@ -154,6 +154,14 @@ MAX_USER_ID_LENGTH = 128
 MAX_SESSION_ID_LENGTH = 128
 MAX_MESSAGE_LENGTH = 4000
 
+# `user_id` and `session_id` flow into log lines (`logger.exception(...,
+# user=%s, session=%s, ...)` in the /chat handler). Without a strict
+# character class, a client can submit `user_id="alice\nFATAL: fake"`
+# and forge log entries — log-injection / log-forging is in OWASP A09.
+# Restrict to URL-safe identifier characters that cover the realistic
+# client identities (random UUIDs / ULIDs / app-generated IDs).
+_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
+
 def _parse_positive_int_env(name: str, default: int) -> int:
     """Parse a positive-integer env var with a clear failure message.
 
@@ -205,9 +213,10 @@ MAX_TOOL_CALLS_PER_CHAT = _parse_positive_int_env("AGENT_MAX_TOOL_CALLS", 8)
 class ChatRequest(BaseModel):
     user_id: str = Field(
         ...,
-        description="Stable identifier for the user (any string).",
+        description="Stable identifier for the user. URL-safe charset only.",
         max_length=MAX_USER_ID_LENGTH,
         min_length=1,
+        pattern=_ID_PATTERN,
     )
     message: str = Field(
         ...,
@@ -217,8 +226,9 @@ class ChatRequest(BaseModel):
     )
     session_id: str | None = Field(
         default=None,
-        description="Optional session id for multi-turn.",
+        description="Optional session id for multi-turn. URL-safe charset only.",
         max_length=MAX_SESSION_ID_LENGTH,
+        pattern=_ID_PATTERN,
     )
 
 

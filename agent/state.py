@@ -11,6 +11,7 @@ a versioned KeyedVectors artifact from GCS instead of training in-process.
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from dataclasses import dataclass
@@ -25,6 +26,13 @@ if str(REPO_ROOT) not in sys.path:
 
 from embedding.tokens import group_trajectory_by_employee, trajectory_tokens
 from embedding.train_w2v import W2V_PARAMS, load_trajectories
+
+# Module-level logger. `agent.server` calls `logging.basicConfig` at
+# import time, so by the time `build_state` runs we inherit the
+# configured handler / level / format. Using `print()` here would
+# bypass that configuration and any log-redaction policy the
+# operator might add later.
+logger = logging.getLogger("devpath.state")
 
 DEFAULT_PROJECT = os.environ.get("GCP_PROJECT", "ai-agent-hackathon-499013")
 DEFAULT_LOCATION = os.environ.get("BQ_LOCATION", "asia-northeast1")
@@ -59,7 +67,7 @@ def build_state(
     location: str = DEFAULT_LOCATION,
     batches: tuple[str, ...] = DEFAULT_BATCHES,
 ) -> AppState:
-    print(f"[state] BQ client project={project} location={location}", flush=True)
+    logger.info("BQ client project=%s location=%s", project, location)
     client = bigquery.Client(
         project=project,
         location=location,
@@ -68,18 +76,22 @@ def build_state(
         ),
     )
 
-    print(f"[state] loading trajectories from `{project}.{dataset}.trajectories` "
-          f"batches={list(batches)}", flush=True)
+    logger.info(
+        "loading trajectories from `%s.%s.trajectories` batches=%s",
+        project, dataset, list(batches),
+    )
     rows = load_trajectories(client, dataset, list(batches))
     if not rows:
         raise RuntimeError(f"No trajectories found for batches {batches}")
 
     grouped = group_trajectory_by_employee(rows)
     sentences = [trajectory_tokens(steps) for steps in grouped.values()]
-    print(f"[state] training Word2Vec on {len(sentences)} sentences "
-          f"({sum(len(s) for s in sentences)} tokens)", flush=True)
+    logger.info(
+        "training Word2Vec on %d sentences (%d tokens)",
+        len(sentences), sum(len(s) for s in sentences),
+    )
     model = Word2Vec(sentences=sentences, **W2V_PARAMS)
-    print(f"[state] vocab={len(model.wv)} dim={model.wv.vector_size}", flush=True)
+    logger.info("vocab=%d dim=%d", len(model.wv), model.wv.vector_size)
 
     return AppState(
         bq_client=client,
