@@ -8,6 +8,7 @@ behaviour without booting the app.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -17,7 +18,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from agent.server import _parse_positive_int_env, resolve_cors_config
+# `agent.server` runs `resolve_cors_config()` at import time. If the test
+# host happens to have `K_SERVICE` set (Cloud Run-style CI runners do
+# this), the import would raise and the whole module would fail to load
+# even though the tests themselves pass explicit env dicts. Seed a
+# placeholder allowlist via setdefault so the import is hermetic;
+# individual tests still call `resolve_cors_config(env=...)` with their
+# own envs and aren't affected.
+os.environ.setdefault("AGENT_ALLOWED_ORIGINS", "http://test-placeholder")
+
+from agent.server import _parse_positive_int_env, resolve_cors_config  # noqa: E402
 
 
 def test_cors_wildcard_locally_when_env_unset():
