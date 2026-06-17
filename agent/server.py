@@ -84,13 +84,34 @@ def resolve_cors_config(env: dict[str, str] | None = None) -> tuple[list[str], b
     burning Gemini quota and BQ cost on the project's bill. Fail-closed
     beats serving `*` to a public URL.
 
+    Misconfiguration guards:
+      * `AGENT_ALLOWED_ORIGINS="*"` (or any list containing `"*"`) is
+        rejected outright — wildcard with `allow_credentials=True`
+        violates the CORS spec, and silently downgrading to
+        `allow_credentials=False` would be a confusing trap. Operators
+        who want wildcard must simply omit the env var.
+      * `AGENT_ALLOWED_ORIGINS=","` (or any value that strips to an
+        empty list) is treated as "unset" so the K_SERVICE gate applies
+        — without this, the operator gets `allow_credentials=True`
+        with zero origins, which is both useless and inconsistent.
+
     Pulled into a function (rather than module-load-time toplevel code)
     so tests can drive it without reloading the module.
     """
     e = os.environ if env is None else env
     raw = e.get("AGENT_ALLOWED_ORIGINS", "").strip()
     if raw:
-        return [o.strip() for o in raw.split(",") if o.strip()], True
+        origins = [o.strip() for o in raw.split(",") if o.strip()]
+        if "*" in origins:
+            raise RuntimeError(
+                "AGENT_ALLOWED_ORIGINS contains '*'; wildcard CORS with "
+                "allow_credentials=True is forbidden by the CORS spec. "
+                "Omit AGENT_ALLOWED_ORIGINS entirely for local-dev "
+                "wildcard, or list explicit origins."
+            )
+        if origins:
+            return origins, True
+        # Empty after parsing (e.g. ",,,") — fall through to the unset path.
     if e.get("K_SERVICE"):
         raise RuntimeError(
             "AGENT_ALLOWED_ORIGINS must be set when running on Cloud Run "
@@ -132,6 +153,30 @@ MAX_USER_ID_LENGTH = 128
 MAX_SESSION_ID_LENGTH = 128
 MAX_MESSAGE_LENGTH = 4000
 
+def _parse_positive_int_env(name: str, default: int) -> int:
+    """Parse a positive-integer env var with a clear failure message.
+
+    The bare `int(os.environ.get(...))` form crashes with an opaque
+    `ValueError` traceback if the operator typo'd the value (e.g.
+    `AGENT_MAX_EVENTS=` or `AGENT_MAX_EVENTS=24a`). Cloud Run logs the
+    traceback but the meaningful info is buried. Raise a clear
+    RuntimeError instead so the deploy-time failure points at the
+    actual misconfiguration.
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        n = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"{name} must be a positive integer, got {raw!r}"
+        ) from exc
+    if n <= 0:
+        raise RuntimeError(f"{name} must be > 0, got {n}")
+    return n
+
+
 # Per-/chat fan-out caps. Without these, a single request can stream an
 # unbounded number of Gemini turns + tool calls. We cap two numbers
 # because they bound different surfaces:
@@ -144,8 +189,8 @@ MAX_MESSAGE_LENGTH = 4000
 # Caps are intentionally generous for a normal answer flow (~3-5 tool
 # calls) but bounded enough that a prompt-injection-driven fan-out
 # can't keep growing cost without limit.
-MAX_EVENTS_PER_CHAT = int(os.environ.get("AGENT_MAX_EVENTS", "24"))
-MAX_TOOL_CALLS_PER_CHAT = int(os.environ.get("AGENT_MAX_TOOL_CALLS", "8"))
+MAX_EVENTS_PER_CHAT = _parse_positive_int_env("AGENT_MAX_EVENTS", 24)
+MAX_TOOL_CALLS_PER_CHAT = _parse_positive_int_env("AGENT_MAX_TOOL_CALLS", 8)
 
 
 class ChatRequest(BaseModel):

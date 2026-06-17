@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from agent.server import resolve_cors_config
+from agent.server import _parse_positive_int_env, resolve_cors_config
 
 
 def test_cors_wildcard_locally_when_env_unset():
@@ -76,3 +76,70 @@ def test_cors_whitespace_only_allowlist_on_cloud_run_fails_closed():
             "K_SERVICE": "devpath-agent",
             "AGENT_ALLOWED_ORIGINS": "   ",
         })
+
+
+def test_cors_literal_wildcard_in_allowlist_rejected():
+    """`AGENT_ALLOWED_ORIGINS='*'` would otherwise be parsed as a 1-element
+    allowlist with credentials=True, which is a CORS spec violation
+    (wildcard + credentials is forbidden). Operator must omit the env
+    var for wildcard, not list `*` explicitly."""
+    with pytest.raises(RuntimeError, match="wildcard CORS"):
+        resolve_cors_config(env={"AGENT_ALLOWED_ORIGINS": "*"})
+
+
+def test_cors_wildcard_mixed_with_real_origins_also_rejected():
+    """Same defensive guard for `*, https://x.example.com` — operator
+    almost certainly meant the explicit origin and the `*` is a typo,
+    but we can't tell which, so fail fast."""
+    with pytest.raises(RuntimeError, match="wildcard CORS"):
+        resolve_cors_config(env={
+            "AGENT_ALLOWED_ORIGINS": "*, https://devpath.example.com",
+        })
+
+
+def test_cors_comma_only_allowlist_on_cloud_run_fails_closed():
+    """`AGENT_ALLOWED_ORIGINS=','` would previously parse to an empty
+    list but still set allow_credentials=True. Treat it as 'unset' so
+    the K_SERVICE gate fires consistently."""
+    with pytest.raises(RuntimeError, match="AGENT_ALLOWED_ORIGINS must be set"):
+        resolve_cors_config(env={
+            "K_SERVICE": "devpath-agent",
+            "AGENT_ALLOWED_ORIGINS": ",,,",
+        })
+
+
+# -- Positive-int env parser ---------------------------------------------------
+
+
+def test_parse_positive_int_env_returns_default_when_unset(monkeypatch):
+    monkeypatch.delenv("FOO_BAR", raising=False)
+    assert _parse_positive_int_env("FOO_BAR", 24) == 24
+
+
+def test_parse_positive_int_env_returns_default_when_blank(monkeypatch):
+    monkeypatch.setenv("FOO_BAR", "")
+    assert _parse_positive_int_env("FOO_BAR", 24) == 24
+
+
+def test_parse_positive_int_env_parses_valid_int(monkeypatch):
+    monkeypatch.setenv("FOO_BAR", "42")
+    assert _parse_positive_int_env("FOO_BAR", 24) == 42
+
+
+def test_parse_positive_int_env_raises_on_garbage(monkeypatch):
+    """Operator typo like `AGENT_MAX_EVENTS=24a` should produce a clear
+    error pointing at the env var, not an opaque ValueError traceback."""
+    monkeypatch.setenv("FOO_BAR", "24a")
+    with pytest.raises(RuntimeError, match="FOO_BAR must be a positive integer"):
+        _parse_positive_int_env("FOO_BAR", 24)
+
+
+def test_parse_positive_int_env_raises_on_zero_or_negative(monkeypatch):
+    """0 and negatives would silently disable the cap (or break the
+    `if event_count > MAX` comparison logic) — reject them explicitly."""
+    monkeypatch.setenv("FOO_BAR", "0")
+    with pytest.raises(RuntimeError, match="FOO_BAR must be > 0"):
+        _parse_positive_int_env("FOO_BAR", 24)
+    monkeypatch.setenv("FOO_BAR", "-3")
+    with pytest.raises(RuntimeError, match="FOO_BAR must be > 0"):
+        _parse_positive_int_env("FOO_BAR", 24)
