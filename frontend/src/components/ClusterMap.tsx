@@ -392,12 +392,15 @@ export default function ClusterMap({
 
 type LegendCorner = "tl" | "tr" | "bl" | "br";
 
-// `tr` uses top-12 (48px) instead of top-2 to clear the header bar
-// pinned at `absolute right-2 top-2` in page.tsx (the
-// "再学習ダッシュボード →" + "DevPath Navigator · 合成データ" pills).
-// If that header changes height, bump this value too.
+// `tr` always uses top-12 (48px) and `tl` uses top-12 below the `md`
+// breakpoint to clear the header bar pinned at `absolute right-2 top-2`
+// in page.tsx (the "再学習ダッシュボード →" + "DevPath Navigator ·
+// 合成データ" pills). On narrow viewports (e.g. iPhone @ 390px) the
+// `tl` panel collided horizontally with those pills and the close (×)
+// button ended up hidden behind them. If the header changes height,
+// bump these values too.
 const CORNER_CLASSES: Record<LegendCorner, string> = {
-  tl: "left-2 top-2",
+  tl: "left-2 top-12 md:top-2",
   tr: "right-2 top-12",
   bl: "left-2 bottom-2",
   br: "right-2 bottom-2",
@@ -440,7 +443,15 @@ function ClusterLegend({
       const c = window.localStorage.getItem("clusterLegend.corner") as LegendCorner | null;
       if (c && c in CORNER_CLASSES) setCorner(c);
       const h = window.localStorage.getItem("clusterLegend.collapsed");
-      if (h === "1") setCollapsed(true);
+      if (h === "1") {
+        setCollapsed(true);
+      } else if (h === null && window.innerWidth < 768) {
+        // No prior preference + narrow viewport → start collapsed so the
+        // panel doesn't eat half the screen on a phone. The user can still
+        // expand via the pill, and that explicit choice (written as "0")
+        // wins on subsequent loads.
+        setCollapsed(true);
+      }
     } catch (err) {
       console.warn("ClusterLegend: localStorage read failed", err);
     }
