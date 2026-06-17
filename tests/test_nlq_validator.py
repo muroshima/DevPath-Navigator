@@ -12,6 +12,7 @@ if str(REPO_ROOT) not in sys.path:
 from agent.tools.nlq_over_corpus import (
     MAX_HARD_LIMIT,
     MAX_SQL_LENGTH,
+    _mask_project_dataset,
     _strip_comments,
     _validate_sql,
 )
@@ -295,3 +296,88 @@ def test_trailing_limit_with_semicolon_passes():
     """An optional trailing `;` is tolerated by the trailing-LIMIT matcher
     (the single-statement check already rejects mid-statement `;`)."""
     _ok("SELECT * FROM `proj.devpath.trajectories` LIMIT 50;")
+
+
+# -- S8 SQL masking tests ------------------------------------------------------
+
+
+def test_mask_project_dataset_strips_backticked_prefix():
+    """`<project>.<dataset>.<table>` → `<table>` in the client-facing SQL.
+    The unmasked form is what we execute; the masked form is what we echo
+    so the GCP project ID isn't reconnaissance gold for unauthenticated
+    callers."""
+    sql = "SELECT * FROM `ai-agent-hackathon-499013.devpath.trajectories` LIMIT 50"
+    masked = _mask_project_dataset(sql, "ai-agent-hackathon-499013", "devpath")
+    assert masked == "SELECT * FROM `trajectories` LIMIT 50"
+
+
+def test_mask_project_dataset_handles_multiple_refs():
+    """JOIN across two allowed tables — both prefixes are stripped."""
+    sql = (
+        "SELECT t.employee_id FROM `ai-agent-hackathon-499013.devpath.trajectories` t "
+        "JOIN `ai-agent-hackathon-499013.devpath.embeddings` e "
+        "ON t.employee_id = e.employee_id LIMIT 10"
+    )
+    masked = _mask_project_dataset(sql, "ai-agent-hackathon-499013", "devpath")
+    assert "ai-agent-hackathon-499013" not in masked
+    assert "`trajectories`" in masked
+    assert "`embeddings`" in masked
+
+
+def test_mask_project_dataset_case_insensitive_match():
+    """Defensive: model output uses the project ID as-given by the prompt,
+    but if a future prompt template upper-cases part of it, the mask
+    should still fire — IAM-enumeration risk doesn't depend on case."""
+    sql = "SELECT * FROM `Ai-Agent-Hackathon-499013.DEVPATH.trajectories` LIMIT 5"
+    masked = _mask_project_dataset(sql, "ai-agent-hackathon-499013", "devpath")
+    assert "ai-agent-hackathon-499013" not in masked.lower()
+    assert "`trajectories`" in masked
+
+
+def test_mask_project_dataset_leaves_other_projects_intact():
+    """Refs to project IDs that aren't ours pass through unchanged. (The
+    validator separately rejects them, but this helper is purely about
+    not leaking *our* project ID — it must not silently rewrite somebody
+    else's project name as a side effect.)"""
+    sql = "SELECT * FROM `someone-else.public_ds.trajectories` LIMIT 5"
+    masked = _mask_project_dataset(sql, "ai-agent-hackathon-499013", "devpath")
+    assert masked == sql
+
+
+def test_mask_project_dataset_noop_when_project_or_dataset_empty():
+    """If state isn't fully initialised (unit tests, very early startup),
+    the helper is a no-op rather than producing garbled output."""
+    sql = "SELECT * FROM `proj.devpath.trajectories` LIMIT 5"
+    assert _mask_project_dataset(sql, "", "devpath") == sql
+    assert _mask_project_dataset(sql, "proj", "") == sql
+
+
+def test_mask_project_dataset_strips_bare_unquoted_prefix():
+    """BigQuery exception strings and validator error messages spell out
+    the fully-qualified `proj.dataset.table` form without backticks; the
+    masker has to catch that too or the masking goal is defeated."""
+    text = "BigQuery error: Not found: Table ai-agent-hackathon-499013.devpath.trajectories"
+    masked = _mask_project_dataset(text, "ai-agent-hackathon-499013", "devpath")
+    assert "ai-agent-hackathon-499013" not in masked
+    assert "trajectories" in masked
+
+
+def test_mask_project_dataset_masks_validator_error_with_disallowed_triple():
+    """The validator returns `Disallowed tables: ['proj.devpath.eval_results']`
+    when the model emits a 3-segment ref matching our project/dataset but a
+    table not on the allowlist. That string MUST be masked before going back
+    to the caller."""
+    err = "Disallowed tables: ['ai-agent-hackathon-499013.devpath.eval_results']"
+    masked = _mask_project_dataset(err, "ai-agent-hackathon-499013", "devpath")
+    assert "ai-agent-hackathon-499013" not in masked
+    assert "devpath." not in masked
+    assert "eval_results" in masked
+
+
+def test_mask_project_dataset_does_not_split_longer_identifiers():
+    """A project id that happens to be a *prefix* of a longer identifier
+    must not be partially rewritten. e.g. if our project is `proj` and a
+    string contains `proj2.foo` it must stay intact."""
+    text = "leave alone: proj2.devpath.trajectories"
+    masked = _mask_project_dataset(text, "proj", "devpath")
+    assert masked == text

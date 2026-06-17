@@ -31,6 +31,18 @@ DEFAULT_LOCATION = os.environ.get("BQ_LOCATION", "asia-northeast1")
 DEFAULT_DATASET = os.environ.get("BQ_DATASET", "devpath")
 DEFAULT_BATCHES = tuple(os.environ.get("AGENT_BATCHES", "initial").split(","))
 
+# Hard ceiling on bytes any single BigQuery job spawned via the shared
+# client is allowed to scan. Applied as `default_query_job_config` so
+# every tool inherits it — `nlq_over_corpus` previously set this
+# per-query, but the hand-written queries in `explain_cluster`,
+# `skill_gap_analysis`, `recommend_next_steps`, and
+# `find_similar_trajectories` had no cap until this default landed.
+# 100 MB is generous for a corpus that fits well under 10 MB and
+# bounds the worst case if a future query slips past the regex
+# validator or if a hand-written query develops an accidental
+# cartesian join.
+DEFAULT_MAX_BYTES_BILLED = 100 * 1024 * 1024  # 100 MB
+
 
 @dataclass
 class AppState:
@@ -48,7 +60,13 @@ def build_state(
     batches: tuple[str, ...] = DEFAULT_BATCHES,
 ) -> AppState:
     print(f"[state] BQ client project={project} location={location}", flush=True)
-    client = bigquery.Client(project=project, location=location)
+    client = bigquery.Client(
+        project=project,
+        location=location,
+        default_query_job_config=bigquery.QueryJobConfig(
+            maximum_bytes_billed=DEFAULT_MAX_BYTES_BILLED,
+        ),
+    )
 
     print(f"[state] loading trajectories from `{project}.{dataset}.trajectories` "
           f"batches={list(batches)}", flush=True)

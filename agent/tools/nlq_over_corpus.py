@@ -86,6 +86,35 @@ def _extract_sql(generated: str) -> str:
     return raw.strip().rstrip(";").strip()
 
 
+def _mask_project_dataset(text: str, project: str, dataset: str) -> str:
+    """Strip the `<project>.<dataset>.` prefix from FQ table refs in any
+    text echoed back to the caller — SQL, validator errors, BigQuery
+    exception messages.
+
+    Without this, response payloads carry the fully-qualified
+    `ai-agent-hackathon-499013.devpath.trajectories` form to any
+    unauthenticated `/chat` caller — useful reconnaissance for IAM
+    enumeration / abuse reports.
+
+    Handles both quoting styles:
+      * Backticked: \\`proj.devpath.table\\` → \\`table\\`
+      * Bare:        proj.devpath.table        →  table
+
+    The bare form is needed because validator error messages and
+    BigQuery exception strings spell out the full triple without
+    backticks. The lookbehind `(?<![\\w.\\-])` prevents partial
+    matches inside longer identifiers (e.g. a project id that
+    happens to be a prefix of another id).
+    """
+    if not project or not dataset:
+        return text
+    p = re.escape(project)
+    d = re.escape(dataset)
+    text = re.sub(rf"`{p}\.{d}\.", "`", text, flags=re.IGNORECASE)
+    text = re.sub(rf"(?<![\w.\-]){p}\.{d}\.", "", text, flags=re.IGNORECASE)
+    return text
+
+
 def _strip_comments(sql: str) -> str:
     """Remove SQL block / line / hash comments before validation.
 
@@ -138,10 +167,12 @@ def _validate_table_refs(sql_lower: str, project: str, dataset: str) -> str | No
                 f"got: {ref}"
             )
         if ref not in allowed_triples:
-            return (
-                f"Disallowed tables: [{ref!r}]; "
-                f"allowed: {sorted(allowed_triples)}"
-            )
+            # Don't echo the configured allowlist (project/dataset) back
+            # to the caller — that turns the error message into a
+            # reconnaissance vector. The agent already knows the right
+            # tables from its system prompt; the caller only needs to
+            # know the request was disallowed.
+            return f"Disallowed tables: [{ref!r}]"
     return None
 
 
@@ -292,21 +323,37 @@ def nlq_over_corpus(question: str) -> dict:
         return {"error": "NL→SQL model returned no text", "sql": None}
 
     sql = _extract_sql(resp.text)
+    # Masked SQL is what we expose to the caller; the unmasked `sql`
+    # variable is what we actually execute.
+    masked_sql = _mask_project_dataset(sql, state.project, state.dataset)
     err = _validate_sql(sql)
     if err:
-        return {"sql": sql, "error": err}
+        # If the validator rejected because the model emitted, say,
+        # `proj.devpath.eval_results` (our project/dataset + a disallowed
+        # table), the error string includes our triple. Mask it.
+        masked_err = _mask_project_dataset(err, state.project, state.dataset)
+        return {"sql": masked_sql, "error": masked_err}
 
     try:
         # Cap the bytes BigQuery is allowed to bill for this query. If the
         # query would scan more than MAX_BYTES_BILLED, BigQuery refuses
         # before any data is read — important because this SQL came from
-        # an LLM and the regex validator is best-effort.
+        # an LLM and the regex validator is best-effort. The shared
+        # client already carries a default cap of the same magnitude
+        # (see agent/state.py); we set it again per-query so the cap is
+        # explicit regardless of how the client is constructed.
         from google.cloud import bigquery
         job_config = bigquery.QueryJobConfig(maximum_bytes_billed=MAX_BYTES_BILLED)
         job = state.bq_client.query(sql, job_config=job_config)
         rows = [dict(r) for r in job.result()]
     except Exception as exc:
-        return {"sql": sql, "error": f"BigQuery error: {exc}"}
+        # BigQuery exception strings often spell out the fully-qualified
+        # `<project>.<dataset>.<table>` in the error text, undoing the
+        # masking effort. Run the message through the masker too.
+        masked_error = _mask_project_dataset(
+            f"BigQuery error: {exc}", state.project, state.dataset
+        )
+        return {"sql": masked_sql, "error": masked_error}
 
     # Normalize row values for JSON serialization (lists, etc.)
     normalized: list[dict] = []
@@ -319,4 +366,4 @@ def nlq_over_corpus(question: str) -> dict:
                 out[k] = v
         normalized.append(out)
 
-    return {"sql": sql, "rows": normalized, "row_count": len(normalized)}
+    return {"sql": masked_sql, "rows": normalized, "row_count": len(normalized)}
