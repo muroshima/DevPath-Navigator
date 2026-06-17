@@ -355,7 +355,7 @@ def test_chat_request_accepts_message_with_whitespace_and_newlines():
     and arbitrary unicode. Only the id fields are charset-restricted."""
     req = ChatRequest(
         user_id="alice",
-        message="line 1\nline 2 with 'quotes' and 🤖 emoji",
+        message="line 1\nline 2 with 'quotes' and 日本語 unicode",
     )
     assert "\n" in req.message
-    assert "🤖" in req.message
+    assert "日本語" in req.message
