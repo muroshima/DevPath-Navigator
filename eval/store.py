@@ -144,26 +144,45 @@ def latest_passing(client: bigquery.Client, dataset: str) -> EvalRecord | None:
 
 
 def history(client: bigquery.Client, dataset: str, limit: int = 50) -> list[dict[str, Any]]:
-    ensure_table(client, dataset)
+    """Retraining evaluation history. READ-ONLY — does not migrate schema.
+
+    Schema migration (`ensure_table`'s `update_table` call) requires
+    `bigquery.tables.update`, which is `dataEditor`-level. The agent
+    runtime SA only has dataset-scoped `dataViewer`, so calling
+    `ensure_table` from this read path 403s. Migration is a write-path
+    responsibility owned by the retrain pipeline (`insert_record` /
+    Cloud Build), which has the right privileges; this function just
+    reads what's there.
+
+    If the table doesn't exist yet (retrain pipeline never ran), return
+    an empty list rather than raising — the dashboard renders an empty
+    state instead of a 500.
+
+    `min_recall_per_archetype` is deliberately omitted from the SELECT:
+    the column was added to `SCHEMA` in PR #29 but the live table may
+    not have been migrated yet, and the upstream `EvalRunSummary`
+    response model doesn't expose it either. Adding it back here would
+    re-introduce the read-from-uncreated-column failure mode.
+    """
     sql = f"""
-    SELECT run_id, run_at, batches, recall_at_10, min_recall_per_archetype,
+    SELECT run_id, run_at, batches, recall_at_10,
            n_clusters, mean_archetype_purity, archetypes_covered, vocab_size,
            decision, decision_reasons
     FROM `{client.project}.{dataset}.{EVAL_TABLE}`
     ORDER BY run_at DESC
     LIMIT {int(limit)}
     """
+    try:
+        rows = list(client.query(sql).result())
+    except NotFound:
+        return []
     out: list[dict[str, Any]] = []
-    for r in client.query(sql).result():
-        min_recall = getattr(r, "min_recall_per_archetype", None)
+    for r in rows:
         out.append({
             "run_id": r.run_id,
             "run_at": r.run_at.isoformat() if r.run_at else None,
             "batches": list(r.batches),
             "recall_at_10": float(r.recall_at_10),
-            "min_recall_per_archetype": (
-                float(min_recall) if min_recall is not None else None
-            ),
             "n_clusters": int(r.n_clusters),
             "mean_archetype_purity": float(r.mean_archetype_purity),
             "archetypes_covered": list(r.archetypes_covered),
