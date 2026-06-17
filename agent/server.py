@@ -164,7 +164,15 @@ def _parse_positive_int_env(name: str, default: int) -> int:
     actual misconfiguration.
     """
     raw = os.environ.get(name)
-    if raw is None or raw.strip() == "":
+    if raw is None:
+        return default
+    # Strip surrounding whitespace before both the empty check and the
+    # parse — env values often pick up trailing whitespace via copy/paste
+    # (`AGENT_MAX_EVENTS="24 "`). Python's `int()` already accepts
+    # surrounding whitespace, but stripping explicitly keeps the error
+    # message clean (no stray spaces in the `got '24 '` repr).
+    raw = raw.strip()
+    if raw == "":
         return default
     try:
         n = int(raw)

@@ -143,3 +143,10 @@ def test_parse_positive_int_env_raises_on_zero_or_negative(monkeypatch):
     monkeypatch.setenv("FOO_BAR", "-3")
     with pytest.raises(RuntimeError, match="FOO_BAR must be > 0"):
         _parse_positive_int_env("FOO_BAR", 24)
+
+
+def test_parse_positive_int_env_strips_surrounding_whitespace(monkeypatch):
+    """Copy/paste-induced whitespace in env values shouldn't fail
+    closed. `AGENT_MAX_EVENTS="24 "` is a clear positive integer."""
+    monkeypatch.setenv("FOO_BAR", "  24\n")
+    assert _parse_positive_int_env("FOO_BAR", 1) == 24
