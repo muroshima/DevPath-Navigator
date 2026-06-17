@@ -86,23 +86,33 @@ def _extract_sql(generated: str) -> str:
     return raw.strip().rstrip(";").strip()
 
 
-def _mask_project_dataset(sql: str, project: str, dataset: str) -> str:
-    """Strip the `<project>.<dataset>.` prefix from backticked table refs in
-    SQL that is echoed back to the caller. The execution path uses the
-    unmasked SQL; this only sanitises the surface form.
+def _mask_project_dataset(text: str, project: str, dataset: str) -> str:
+    """Strip the `<project>.<dataset>.` prefix from FQ table refs in any
+    text echoed back to the caller — SQL, validator errors, BigQuery
+    exception messages.
 
-    Without this, `tool_results[].response.sql` carries the fully-qualified
+    Without this, response payloads carry the fully-qualified
     `ai-agent-hackathon-499013.devpath.trajectories` form to any
     unauthenticated `/chat` caller — useful reconnaissance for IAM
-    enumeration / abuse reports. After masking the model's
-    `\\`proj.devpath.trajectories\\`` becomes `\\`trajectories\\``, which
-    is sufficient for users to follow what query ran.
+    enumeration / abuse reports.
+
+    Handles both quoting styles:
+      * Backticked: \\`proj.devpath.table\\` → \\`table\\`
+      * Bare:        proj.devpath.table        →  table
+
+    The bare form is needed because validator error messages and
+    BigQuery exception strings spell out the full triple without
+    backticks. The lookbehind `(?<![\\w.\\-])` prevents partial
+    matches inside longer identifiers (e.g. a project id that
+    happens to be a prefix of another id).
     """
     if not project or not dataset:
-        return sql
+        return text
     p = re.escape(project)
     d = re.escape(dataset)
-    return re.sub(rf"`{p}\.{d}\.", "`", sql, flags=re.IGNORECASE)
+    text = re.sub(rf"`{p}\.{d}\.", "`", text, flags=re.IGNORECASE)
+    text = re.sub(rf"(?<![\w.\-]){p}\.{d}\.", "", text, flags=re.IGNORECASE)
+    return text
 
 
 def _strip_comments(sql: str) -> str:
@@ -157,10 +167,12 @@ def _validate_table_refs(sql_lower: str, project: str, dataset: str) -> str | No
                 f"got: {ref}"
             )
         if ref not in allowed_triples:
-            return (
-                f"Disallowed tables: [{ref!r}]; "
-                f"allowed: {sorted(allowed_triples)}"
-            )
+            # Don't echo the configured allowlist (project/dataset) back
+            # to the caller — that turns the error message into a
+            # reconnaissance vector. The agent already knows the right
+            # tables from its system prompt; the caller only needs to
+            # know the request was disallowed.
+            return f"Disallowed tables: [{ref!r}]"
     return None
 
 
@@ -316,7 +328,11 @@ def nlq_over_corpus(question: str) -> dict:
     masked_sql = _mask_project_dataset(sql, state.project, state.dataset)
     err = _validate_sql(sql)
     if err:
-        return {"sql": masked_sql, "error": err}
+        # If the validator rejected because the model emitted, say,
+        # `proj.devpath.eval_results` (our project/dataset + a disallowed
+        # table), the error string includes our triple. Mask it.
+        masked_err = _mask_project_dataset(err, state.project, state.dataset)
+        return {"sql": masked_sql, "error": masked_err}
 
     try:
         # Cap the bytes BigQuery is allowed to bill for this query. If the
@@ -331,7 +347,13 @@ def nlq_over_corpus(question: str) -> dict:
         job = state.bq_client.query(sql, job_config=job_config)
         rows = [dict(r) for r in job.result()]
     except Exception as exc:
-        return {"sql": masked_sql, "error": f"BigQuery error: {exc}"}
+        # BigQuery exception strings often spell out the fully-qualified
+        # `<project>.<dataset>.<table>` in the error text, undoing the
+        # masking effort. Run the message through the masker too.
+        masked_error = _mask_project_dataset(
+            f"BigQuery error: {exc}", state.project, state.dataset
+        )
+        return {"sql": masked_sql, "error": masked_error}
 
     # Normalize row values for JSON serialization (lists, etc.)
     normalized: list[dict] = []

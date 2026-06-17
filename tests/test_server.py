@@ -65,3 +65,14 @@ def test_cors_empty_allowlist_falls_back_to_default():
     })
     assert origins == ["*"]
     assert allow_credentials is False
+
+
+def test_cors_whitespace_only_allowlist_on_cloud_run_fails_closed():
+    """Regression: a whitespace-only AGENT_ALLOWED_ORIGINS must NOT
+    bypass the Cloud Run fail-closed behavior. After .strip() the value
+    is empty, so the K_SERVICE gate must still fire."""
+    with pytest.raises(RuntimeError, match="AGENT_ALLOWED_ORIGINS must be set"):
+        resolve_cors_config(env={
+            "K_SERVICE": "devpath-agent",
+            "AGENT_ALLOWED_ORIGINS": "   ",
+        })

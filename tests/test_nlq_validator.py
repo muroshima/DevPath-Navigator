@@ -350,3 +350,34 @@ def test_mask_project_dataset_noop_when_project_or_dataset_empty():
     sql = "SELECT * FROM `proj.devpath.trajectories` LIMIT 5"
     assert _mask_project_dataset(sql, "", "devpath") == sql
     assert _mask_project_dataset(sql, "proj", "") == sql
+
+
+def test_mask_project_dataset_strips_bare_unquoted_prefix():
+    """BigQuery exception strings and validator error messages spell out
+    the fully-qualified `proj.dataset.table` form without backticks; the
+    masker has to catch that too or the masking goal is defeated."""
+    text = "BigQuery error: Not found: Table ai-agent-hackathon-499013.devpath.trajectories"
+    masked = _mask_project_dataset(text, "ai-agent-hackathon-499013", "devpath")
+    assert "ai-agent-hackathon-499013" not in masked
+    assert "trajectories" in masked
+
+
+def test_mask_project_dataset_masks_validator_error_with_disallowed_triple():
+    """The validator returns `Disallowed tables: ['proj.devpath.eval_results']`
+    when the model emits a 3-segment ref matching our project/dataset but a
+    table not on the allowlist. That string MUST be masked before going back
+    to the caller."""
+    err = "Disallowed tables: ['ai-agent-hackathon-499013.devpath.eval_results']"
+    masked = _mask_project_dataset(err, "ai-agent-hackathon-499013", "devpath")
+    assert "ai-agent-hackathon-499013" not in masked
+    assert "devpath." not in masked
+    assert "eval_results" in masked
+
+
+def test_mask_project_dataset_does_not_split_longer_identifiers():
+    """A project id that happens to be a *prefix* of a longer identifier
+    must not be partially rewritten. e.g. if our project is `proj` and a
+    string contains `proj2.foo` it must stay intact."""
+    text = "leave alone: proj2.devpath.trajectories"
+    masked = _mask_project_dataset(text, "proj", "devpath")
+    assert masked == text
