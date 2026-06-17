@@ -86,6 +86,25 @@ def _extract_sql(generated: str) -> str:
     return raw.strip().rstrip(";").strip()
 
 
+def _mask_project_dataset(sql: str, project: str, dataset: str) -> str:
+    """Strip the `<project>.<dataset>.` prefix from backticked table refs in
+    SQL that is echoed back to the caller. The execution path uses the
+    unmasked SQL; this only sanitises the surface form.
+
+    Without this, `tool_results[].response.sql` carries the fully-qualified
+    `ai-agent-hackathon-499013.devpath.trajectories` form to any
+    unauthenticated `/chat` caller — useful reconnaissance for IAM
+    enumeration / abuse reports. After masking the model's
+    `\\`proj.devpath.trajectories\\`` becomes `\\`trajectories\\``, which
+    is sufficient for users to follow what query ran.
+    """
+    if not project or not dataset:
+        return sql
+    p = re.escape(project)
+    d = re.escape(dataset)
+    return re.sub(rf"`{p}\.{d}\.", "`", sql, flags=re.IGNORECASE)
+
+
 def _strip_comments(sql: str) -> str:
     """Remove SQL block / line / hash comments before validation.
 
@@ -292,21 +311,27 @@ def nlq_over_corpus(question: str) -> dict:
         return {"error": "NL→SQL model returned no text", "sql": None}
 
     sql = _extract_sql(resp.text)
+    # Masked SQL is what we expose to the caller; the unmasked `sql`
+    # variable is what we actually execute.
+    masked_sql = _mask_project_dataset(sql, state.project, state.dataset)
     err = _validate_sql(sql)
     if err:
-        return {"sql": sql, "error": err}
+        return {"sql": masked_sql, "error": err}
 
     try:
         # Cap the bytes BigQuery is allowed to bill for this query. If the
         # query would scan more than MAX_BYTES_BILLED, BigQuery refuses
         # before any data is read — important because this SQL came from
-        # an LLM and the regex validator is best-effort.
+        # an LLM and the regex validator is best-effort. The shared
+        # client already carries a default cap of the same magnitude
+        # (see agent/state.py); we set it again per-query so the cap is
+        # explicit regardless of how the client is constructed.
         from google.cloud import bigquery
         job_config = bigquery.QueryJobConfig(maximum_bytes_billed=MAX_BYTES_BILLED)
         job = state.bq_client.query(sql, job_config=job_config)
         rows = [dict(r) for r in job.result()]
     except Exception as exc:
-        return {"sql": sql, "error": f"BigQuery error: {exc}"}
+        return {"sql": masked_sql, "error": f"BigQuery error: {exc}"}
 
     # Normalize row values for JSON serialization (lists, etc.)
     normalized: list[dict] = []
@@ -319,4 +344,4 @@ def nlq_over_corpus(question: str) -> dict:
                 out[k] = v
         normalized.append(out)
 
-    return {"sql": sql, "rows": normalized, "row_count": len(normalized)}
+    return {"sql": masked_sql, "rows": normalized, "row_count": len(normalized)}

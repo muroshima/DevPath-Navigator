@@ -70,19 +70,38 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="DevPath Navigator", lifespan=lifespan)
 
-# CORS — production traffic flows through the Next.js frontend (which
-# proxies via /api/*), so the browser only sees one origin. Direct calls
-# from a browser to this service are blocked unless the origin is in
-# AGENT_ALLOWED_ORIGINS (comma-separated). For local dev that env var is
-# empty, which keeps the previous wildcard behavior so curl + localhost
-# clients still work.
-_allow_origins_raw = os.environ.get("AGENT_ALLOWED_ORIGINS", "").strip()
-if _allow_origins_raw:
-    _allow_origins = [o.strip() for o in _allow_origins_raw.split(",") if o.strip()]
-    _allow_credentials = True
-else:
-    _allow_origins = ["*"]
-    _allow_credentials = False  # CORS forbids credentials with wildcard
+def resolve_cors_config(env: dict[str, str] | None = None) -> tuple[list[str], bool]:
+    """Resolve CORS origins + credentials flag from environment.
+
+    Production traffic flows through the Next.js frontend (which proxies
+    via /api/*), so the browser only sees one origin. Direct calls from a
+    browser to this service are blocked unless the origin is in
+    AGENT_ALLOWED_ORIGINS (comma-separated).
+
+    On Cloud Run (K_SERVICE is set) we refuse to return wildcard CORS:
+    the service is public and unauthenticated, so `*` would let any web
+    page issue cross-origin POSTs to /chat from a visitor's browser,
+    burning Gemini quota and BQ cost on the project's bill. Fail-closed
+    beats serving `*` to a public URL.
+
+    Pulled into a function (rather than module-load-time toplevel code)
+    so tests can drive it without reloading the module.
+    """
+    e = os.environ if env is None else env
+    raw = e.get("AGENT_ALLOWED_ORIGINS", "").strip()
+    if raw:
+        return [o.strip() for o in raw.split(",") if o.strip()], True
+    if e.get("K_SERVICE"):
+        raise RuntimeError(
+            "AGENT_ALLOWED_ORIGINS must be set when running on Cloud Run "
+            "(K_SERVICE is set). Refusing to start with wildcard CORS on a "
+            "public unauthenticated endpoint."
+        )
+    # CORS forbids credentials with wildcard, so allow_credentials=False.
+    return ["*"], False
+
+
+_allow_origins, _allow_credentials = resolve_cors_config()
 
 app.add_middleware(
     CORSMiddleware,
@@ -112,6 +131,21 @@ require_read_quota = rate_limit_dependency(read_limiter)
 MAX_USER_ID_LENGTH = 128
 MAX_SESSION_ID_LENGTH = 128
 MAX_MESSAGE_LENGTH = 4000
+
+# Per-/chat fan-out caps. Without these, a single request can stream an
+# unbounded number of Gemini turns + tool calls. We cap two numbers
+# because they bound different surfaces:
+#   * MAX_EVENTS_PER_CHAT  — total ADK events the runner streams. Even
+#                            non-tool events cost wall-clock + tokens.
+#   * MAX_TOOL_CALLS_PER_CHAT — function_call parts Gemini emits. Each
+#                            tool invocation runs at least one BQ job
+#                            (some run a nested Gemini call via
+#                            `nlq_over_corpus`). This is the cost lever.
+# Caps are intentionally generous for a normal answer flow (~3-5 tool
+# calls) but bounded enough that a prompt-injection-driven fan-out
+# can't keep growing cost without limit.
+MAX_EVENTS_PER_CHAT = int(os.environ.get("AGENT_MAX_EVENTS", "24"))
+MAX_TOOL_CALLS_PER_CHAT = int(os.environ.get("AGENT_MAX_TOOL_CALLS", "8"))
 
 
 class ChatRequest(BaseModel):
@@ -282,13 +316,24 @@ async def chat(req: ChatRequest) -> ChatResponse:
     response_text = ""
     tool_calls: list[ToolCall] = []
     tool_results: list[ToolResult] = []
+    event_count = 0
+    tool_call_count = 0
+    hit_cap: str | None = None  # set to a label when a fan-out cap is reached
     try:
         async for event in runner.run_async(
             user_id=req.user_id, session_id=session.id, new_message=content
         ):
+            event_count += 1
+            if event_count > MAX_EVENTS_PER_CHAT:
+                hit_cap = f"event cap ({MAX_EVENTS_PER_CHAT})"
+                break
             if event.content and event.content.parts:
                 for part in event.content.parts:
                     if part.function_call:
+                        if tool_call_count >= MAX_TOOL_CALLS_PER_CHAT:
+                            hit_cap = f"tool-call cap ({MAX_TOOL_CALLS_PER_CHAT})"
+                            break
+                        tool_call_count += 1
                         tool_calls.append(ToolCall(
                             name=part.function_call.name,
                             args=dict(part.function_call.args) if part.function_call.args else None,
@@ -299,6 +344,8 @@ async def chat(req: ChatRequest) -> ChatResponse:
                             response=dict(part.function_response.response)
                             if part.function_response.response else None,
                         ))
+                if hit_cap:
+                    break
             if event.is_final_response() and event.content and event.content.parts:
                 for part in event.content.parts:
                     # Skip Gemini thinking parts — those are internal reasoning,
@@ -308,6 +355,16 @@ async def chat(req: ChatRequest) -> ChatResponse:
                         continue
                     if part.text:
                         response_text += part.text
+        if hit_cap:
+            logger.warning(
+                "[chat] %s reached (events=%d tool_calls=%d user=%s session=%s)",
+                hit_cap, event_count, tool_call_count, req.user_id, session.id,
+            )
+            if not response_text:
+                response_text = (
+                    "Sorry, I had to stop early because this conversation hit a "
+                    "per-request safety cap. Try asking a more specific question."
+                )
     except Exception as exc:
         # Don't leak the raw exception text to the caller — it might include
         # internal table names, SDK stack hints, or other reconnaissance gold.
