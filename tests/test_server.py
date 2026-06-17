@@ -18,19 +18,19 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-# `agent.server` runs `resolve_cors_config()` at import time. If the test
-# host happens to have `K_SERVICE` set (Cloud Run-style CI runners do
-# this) AND `AGENT_ALLOWED_ORIGINS` is missing, empty, whitespace-only,
-# or comma-only (i.e. parses to an empty origin list), the import
-# raises and the whole module fails to load.
+# `agent.server` runs `resolve_cors_config()` at import time. The only
+# failure case we need to guard against is "K_SERVICE is set AND
+# AGENT_ALLOWED_ORIGINS parses to an empty list" — that combination
+# raises during the import and the whole test module fails to load on
+# Cloud Run-style CI runners. Gate the mutation on K_SERVICE so we
+# don't unnecessarily touch the process env in normal local runs.
 #
-# Replicate the production parse so this guard catches the same shapes
-# `resolve_cors_config` treats as "unset". Tests pass explicit env
-# dicts to `resolve_cors_config`, so the placeholder we install here
-# doesn't affect their assertions.
-_raw_origins = os.environ.get("AGENT_ALLOWED_ORIGINS", "")
-if not any(o.strip() for o in _raw_origins.split(",")):
-    os.environ["AGENT_ALLOWED_ORIGINS"] = "http://test-placeholder"
+# Tests pass explicit env dicts to `resolve_cors_config`, so the
+# placeholder we install here doesn't affect their assertions.
+if os.environ.get("K_SERVICE"):
+    _raw_origins = os.environ.get("AGENT_ALLOWED_ORIGINS", "")
+    if not any(o.strip() for o in _raw_origins.split(",")):
+        os.environ["AGENT_ALLOWED_ORIGINS"] = "http://test-placeholder"
 
 from agent.server import (  # noqa: E402
     _consume_runner_events,
@@ -77,8 +77,10 @@ def test_cors_explicit_allowlist_locally_also_enables_credentials():
 
 
 def test_cors_empty_allowlist_falls_back_to_default():
-    """Whitespace-only AGENT_ALLOWED_ORIGINS is treated as 'unset' so the
-    K_SERVICE gate applies the same way as a missing env var."""
+    """Whitespace-only AGENT_ALLOWED_ORIGINS is treated as 'unset' for
+    the purposes of the local-dev wildcard fallback (no K_SERVICE
+    here — see the next test for the Cloud Run gate combined with
+    whitespace)."""
     origins, allow_credentials = resolve_cors_config(env={
         "AGENT_ALLOWED_ORIGINS": "   ",
     })
