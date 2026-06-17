@@ -7,3 +7,4 @@ out
 .env.development
 *.log
 .DS_Store
+*.tsbuildinfo

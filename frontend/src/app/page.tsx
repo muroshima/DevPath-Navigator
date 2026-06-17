@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import ChatPanel from "@/components/ChatPanel";
 import ClusterMap from "@/components/ClusterMap";
 import ProfileForm from "@/components/ProfileForm";
+import ResizeHandle from "@/components/ResizeHandle";
 import ToolLog from "@/components/ToolLog";
+import { useResizableSidebar } from "@/hooks/useResizableSidebar";
+import { useViewport } from "@/hooks/useViewport";
 import { fetchMap, postChat } from "@/lib/api";
 import type {
   ChatMessage,
@@ -60,6 +63,50 @@ export default function Page() {
   const [userPoint, setUserPoint] = useState<UserPoint | null>(null);
   const [highlightEmployees, setHighlightEmployees] = useState<string[]>([]);
   const [recommendedPaths, setRecommendedPaths] = useState<RecommendedPath[]>([]);
+
+  const { isMobile } = useViewport();
+  const sidebar = useResizableSidebar({
+    defaultWidth: 440,
+    minWidth: 320,
+    maxWidth: 720,
+    enabled: !isMobile,
+  });
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
+  // Auto-close the drawer when the viewport widens past the mobile breakpoint
+  // (e.g. rotate to landscape). Without this the drawer state would silently
+  // persist into the desktop layout where it's irrelevant.
+  useEffect(() => {
+    if (!isMobile && mobileSidebarOpen) setMobileSidebarOpen(false);
+  }, [isMobile, mobileSidebarOpen]);
+
+  // Escape closes the mobile drawer — standard overlay/dialog UX.
+  useEffect(() => {
+    if (!mobileSidebarOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setMobileSidebarOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mobileSidebarOpen]);
+
+  // When the modal drawer opens, move focus into it so keyboard / SR users
+  // land inside the dialog (otherwise focus stays on the FAB behind the
+  // backdrop, which contradicts `aria-modal`). On close, restore focus to
+  // whatever triggered the open — usually the FAB — so the user doesn't
+  // land on document.body.
+  const mobileDrawerRef = useRef<HTMLElement>(null);
+  const triggerBeforeDrawerRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (mobileSidebarOpen) {
+      triggerBeforeDrawerRef.current =
+        (document.activeElement as HTMLElement | null) ?? null;
+      mobileDrawerRef.current?.focus();
+    } else if (triggerBeforeDrawerRef.current) {
+      triggerBeforeDrawerRef.current.focus();
+      triggerBeforeDrawerRef.current = null;
+    }
+  }, [mobileSidebarOpen]);
 
   const userId = useMemo(() => `web-${Math.random().toString(36).slice(2, 10)}`, []);
 
@@ -182,10 +229,29 @@ export default function Page() {
     }
   }
 
+  const sidebarContent = (
+    <>
+      <div className="max-h-[55vh] overflow-y-auto border-b border-slate-700 bg-slate-900/60 p-3">
+        <ProfileForm
+          onSubmit={(message) => send(message)}
+          disabled={busy}
+        />
+      </div>
+      <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex-1 overflow-hidden border-b border-slate-700">
+          <ChatPanel messages={messages} onSend={send} busy={busy} />
+        </div>
+        <div className="h-[35%] overflow-hidden bg-slate-900/60">
+          <ToolLog entries={logEntries} />
+        </div>
+      </div>
+    </>
+  );
+
   return (
-    <div className="flex h-screen text-slate-100">
+    <div className="flex h-screen overflow-hidden text-slate-100">
       {/* Map */}
-      <section className="relative flex-1 border-r border-slate-700">
+      <section className="relative flex-1 min-w-0 border-r border-slate-700">
         {mapData ? (
           <ClusterMap
             points={mapData.points}
@@ -212,23 +278,63 @@ export default function Page() {
         </div>
       </section>
 
-      {/* Right column: profile + chat + log */}
-      <aside className="flex w-[440px] flex-col">
-        <div className="max-h-[55vh] overflow-y-auto border-b border-slate-700 bg-slate-900/60 p-3">
-          <ProfileForm
-            onSubmit={(message) => send(message)}
-            disabled={busy}
+      {/* Desktop / tablet: in-flow resizable sidebar */}
+      {!isMobile && (
+        <>
+          <ResizeHandle
+            width={sidebar.width}
+            minWidth={sidebar.minWidth}
+            maxWidth={sidebar.maxWidth}
+            onPointerDown={sidebar.startDrag}
+            onDoubleClick={sidebar.resetWidth}
+            onWidthChange={sidebar.setWidth}
+            isDragging={sidebar.isDragging}
           />
-        </div>
-        <div className="flex flex-1 flex-col overflow-hidden">
-          <div className="flex-1 overflow-hidden border-b border-slate-700">
-            <ChatPanel messages={messages} onSend={send} busy={busy} />
-          </div>
-          <div className="h-[35%] overflow-hidden bg-slate-900/60">
-            <ToolLog entries={logEntries} />
-          </div>
-        </div>
-      </aside>
+          <aside
+            className="flex shrink-0 flex-col"
+            style={{ width: `${sidebar.width}px` }}
+          >
+            {sidebarContent}
+          </aside>
+        </>
+      )}
+
+      {/* Mobile: drawer overlay + FAB toggle */}
+      {isMobile && (
+        <>
+          <button
+            type="button"
+            onClick={() => setMobileSidebarOpen((v) => !v)}
+            className="fixed bottom-4 right-4 z-30 rounded-full bg-emerald-500 px-4 py-3 text-sm font-medium text-slate-900 shadow-lg shadow-emerald-900/40 hover:bg-emerald-400 active:scale-95"
+            aria-label={mobileSidebarOpen ? "サイドバーを閉じる" : "サイドバーを開く"}
+            aria-expanded={mobileSidebarOpen}
+            aria-controls="mobile-sidebar"
+          >
+            {mobileSidebarOpen ? "閉じる" : "チャット"}
+          </button>
+          {mobileSidebarOpen && (
+            <>
+              <button
+                type="button"
+                aria-label="サイドバーを閉じる"
+                onClick={() => setMobileSidebarOpen(false)}
+                className="fixed inset-0 z-10 bg-slate-950/60"
+              />
+              <aside
+                ref={mobileDrawerRef}
+                id="mobile-sidebar"
+                role="dialog"
+                aria-modal="true"
+                aria-label="キャリアサイドバー"
+                tabIndex={-1}
+                className="fixed inset-y-0 right-0 z-20 flex w-[min(92vw,420px)] flex-col border-l border-slate-700 bg-slate-950 shadow-2xl focus:outline-none"
+              >
+                {sidebarContent}
+              </aside>
+            </>
+          )}
+        </>
+      )}
     </div>
   );
 }
