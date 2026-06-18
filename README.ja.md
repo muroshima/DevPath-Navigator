@@ -6,6 +6,21 @@
 Gemini エージェントが「似た軌跡を歩んだエンジニアの実際の次の一手」
 を根拠付きで推薦するキャリアナビゲーター。
 
+> **DevOps × AI Agent**: DevPath Navigator はキャリアナビ AI
+> エージェントです。「動く」だけでなく「運用できる」状態にする
+> ために DevOps のプラクティスを取り入れています:
+> - **Observability**: エージェントの推論プロセスを UI で
+>   リアルタイム可視化
+> - **Quality gate as code**: 評価ゲート (Recall@10 + per-archetype
+>   最低ライン) を通過したモデルだけがデプロイされる仕組み
+> - **Reproducible-by-design**: 合成データ + 固定シードで完全再現可能
+> - **Automated retrain loop**: データ流入 → retrain → 評価 →
+>   条件付きデプロイを Cloud Build 1 本のパイプラインに
+>
+> 「動くエージェント」と「運用できるエージェント」は別物です。
+> DevPath Navigator は **AI Agent の運用に DevOps の道具を持ち込んだ
+> 作品** です。
+
 [**▶ ライブデモ**](https://devpath-frontend-430189693163.asia-northeast1.run.app)
 &middot; [Agent API (Swagger)](https://devpath-agent-430189693163.asia-northeast1.run.app/docs)
 &middot; [アーキテクチャ](./ARCHITECTURE.ja.md)

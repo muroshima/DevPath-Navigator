@@ -6,6 +6,20 @@ Vectorize software engineers' career trajectories, project them onto a
 2D map, and let a Gemini agent recommend "what to do next" — grounded
 in the actual moves of engineers with similar paths.
 
+> **DevOps × AI Agent**: DevPath Navigator is a career-navigation AI
+> agent. To make it actually operable — not just demoable — we
+> brought in DevOps practices:
+> - **Observability**: real-time reasoning log in the UI
+> - **Quality gate as code**: only models that pass the eval gate
+>   (Recall@10 + per-archetype floor) get deployed
+> - **Reproducible-by-design**: synthetic data + fixed seed
+> - **Automated retrain loop**: data arrival → retrain → evaluate →
+>   conditional deploy, all in one Cloud Build pipeline
+>
+> "An agent that runs" and "an agent you can operate" are different
+> things. DevPath Navigator is **an AI agent built with the DevOps
+> toolkit**.
+
 [**▶ Live demo**](https://devpath-frontend-430189693163.asia-northeast1.run.app)
 &middot; [Agent API (Swagger)](https://devpath-agent-430189693163.asia-northeast1.run.app/docs)
 &middot; [Architecture](./ARCHITECTURE.md)
